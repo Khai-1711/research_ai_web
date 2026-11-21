@@ -10,7 +10,9 @@ export interface Perspective {
   name: string;
   rolePrompt: string;
   tags: string[]; // e.g. ["Kỹ_thuật", "Rủi_ro"]
-  modelLabel: string; // e.g. "gemini-4-hydrogen"
+  modelLabel: string; // e.g. "gemini-4-hydrogen", "gemini-neon", "gemini-carbon"
+  providerId?: string; // e.g. "bridge-local" or custom API provider id
+  pinnedLaneId?: string; // e.g. "acc1", "acc2", "acc3" (empty = auto load-balance)
   colorIndex: number; // 0..9 mapped to --p-0..--p-9
   enabled: boolean;
 }
@@ -184,20 +186,53 @@ export interface PerspectivePreset {
   perspectives: Omit<Perspective, 'id'>[];
 }
 
+export interface LaneInfo {
+  id: string;
+  name: string;
+  bridgeLabel: string;
+  url: string;
+  reachable: boolean;
+  control: string;
+  authOk: boolean;
+  model: string;
+  accountStatus: string;
+}
+
 export interface BridgeHealth {
   mode: 'bridge' | 'gemini-preview';
   bridgeUrl: string | null;
   healthyWorkers: number;
   totalWorkers: number;
   lanes: string[];
+  laneDetails?: LaneInfo[];
   guestMode: boolean;
   bridgeOffline: boolean;
   defaultModel: string;
+}
+
+export interface ModelOption {
+  id: string;
+  label: string;
+  providerId: string;
+  providerName: string;
+}
+
+export interface AIProviderConfig {
+  id: string;
+  name: string;
+  kind: 'bridge' | 'gemini_api' | 'openai_compat';
+  baseUrl: string;
+  defaultModel: string;
+  hasApiKey: boolean;
+  apiKeyMasked: string;
+  builtin: boolean;
 }
 
 export interface AppSettings {
   maxConcurrency: number;
   approveResearchPlan: boolean;
   anonymizeJudge: boolean;
-  simulateBridgeAlert: 'none' | 'offline' | 'guest';
+  judgeModel?: string;
+  judgeProviderId?: string;
+  judgeLaneId?: string;
 }

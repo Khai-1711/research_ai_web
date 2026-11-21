@@ -476,13 +476,25 @@ export function FlowCanvasSvg({
       </div>
 
       {/* Interactive SVG Stage */}
-      <div
-        className="w-full h-full flex items-center justify-center transition-transform duration-75"
-        style={{
-          transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-          transformOrigin: 'center center',
-        }}
-      >
+      {graph.nodes.length === 0 ? (
+        <div className="w-full h-full flex items-center justify-center p-8 relative z-10">
+          <div className="max-w-md text-center p-6 rounded-2xl border border-dashed border-[var(--border-strong)] bg-[var(--surface)]/85 space-y-2">
+            <p className="font-display text-base font-semibold text-[var(--ink)]">
+              Chưa có luồng dữ liệu trong phòng này
+            </p>
+            <p className="text-xs text-[var(--ink-secondary)] leading-relaxed">
+              Hãy gửi câu hỏi trong Phòng Chat (hoặc chọn phòng đã có hội thoại ở thanh trên) để xem sơ đồ luồng xử lý thực tế theo thời gian thực.
+            </p>
+          </div>
+        </div>
+      ) : (
+        <div
+          className="w-full h-full flex items-center justify-center transition-transform duration-75"
+          style={{
+            transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+            transformOrigin: 'center center',
+          }}
+        >
         <svg
           width={layout.totalW}
           height={layout.totalH}
@@ -824,7 +836,8 @@ export function FlowCanvasSvg({
               );
             })}
         </svg>
-      </div>
+        </div>
+      )}
 
       {/* Subtle Visual Legend (top-left) */}
       <div

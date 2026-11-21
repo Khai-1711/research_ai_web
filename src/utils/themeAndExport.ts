@@ -1,9 +1,17 @@
-import type { AppSettings, PerspectivePreset, Room, ThemeMode } from '../types.ts';
-import { DEFAULT_PRESETS } from '../seedData.ts';
+import type { AppSettings, LaneInfo, PerspectivePreset, Room, ThemeMode } from '../types.ts';
+import { DEFAULT_PRESETS } from '../presets.ts';
+
+export function formatLaneDisplay(laneId: string | undefined, laneDetails?: LaneInfo[]): string {
+  if (!laneId) return 'Tự động';
+  const found = laneDetails?.find((l) => l.id === laneId);
+  if (!found) return laneId;
+  const custom = found.name && found.name !== found.id ? found.name : '';
+  return custom ? `${found.id} (${custom})` : found.id;
+}
 
 export const THEME_STORAGE_KEY = 'research_lab_theme_v2';
 export const PANELS_STORAGE_KEY = 'research_lab_panels_v2';
-export const PRESETS_STORAGE_KEY = 'research_lab_presets_v2';
+export const PRESETS_STORAGE_KEY = 'research_lab_presets_v3';
 export const SETTINGS_STORAGE_KEY = 'research_lab_settings_v2';
 
 export function getPerspectiveColorVar(colorIndex: number): string {
@@ -80,25 +88,28 @@ export function loadSettings(): AppSettings {
     const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
     if (!raw) {
       return {
-        maxConcurrency: 2,
+        maxConcurrency: 3,
         approveResearchPlan: true,
         anonymizeJudge: true,
-        simulateBridgeAlert: 'none',
+        judgeModel: 'gemini-neon',
+        judgeProviderId: 'bridge-local',
+        judgeLaneId: '',
       };
     }
     const parsed = JSON.parse(raw) as Partial<AppSettings>;
     return {
-      maxConcurrency: parsed.maxConcurrency ?? 2,
+      maxConcurrency: parsed.maxConcurrency ?? 3,
       approveResearchPlan: parsed.approveResearchPlan ?? true,
       anonymizeJudge: parsed.anonymizeJudge ?? true,
-      simulateBridgeAlert: parsed.simulateBridgeAlert ?? 'none',
+      judgeModel: parsed.judgeModel || 'gemini-neon',
+      judgeProviderId: parsed.judgeProviderId || 'bridge-local',
+      judgeLaneId: parsed.judgeLaneId || '',
     };
   } catch {
     return {
       maxConcurrency: 2,
       approveResearchPlan: true,
       anonymizeJudge: true,
-      simulateBridgeAlert: 'none',
     };
   }
 }

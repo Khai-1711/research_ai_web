@@ -68,7 +68,7 @@ export function SwimlaneView({ graph, selectedNodeId, onSelectNode }: SwimlaneVi
 
         {lanes.length === 0 ? (
           <div className="p-10 rounded-xl border border-dashed border-[var(--border-strong)] text-center text-sm text-[var(--ink-muted)]">
-            Chưa có dữ liệu làn chạy nào. Hãy chạy thử luồng mẫu hoặc gửi câu hỏi ở Phòng Chat.
+            Chưa có dữ liệu làn chạy nào. Hãy gửi câu hỏi ở Phòng Chat để theo dõi thời gian thực từng luồng AI.
           </div>
         ) : (
           <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow-card)] overflow-hidden">

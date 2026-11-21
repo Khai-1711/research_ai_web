@@ -1,45 +1,340 @@
-import React from 'react';
-import { AlertTriangle, Cpu, RotateCcw, ShieldCheck, Sliders, X } from 'lucide-react';
-import type { AppSettings, BridgeHealth } from '../types.ts';
+import React, { useState } from 'react';
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Cpu,
+  Edit3,
+  KeyRound,
+  Plus,
+  RefreshCw,
+  Scale,
+  ShieldCheck,
+  Sliders,
+  Trash2,
+  UserPlus,
+  X,
+} from 'lucide-react';
+import type {
+  AIProviderConfig,
+  AppSettings,
+  BridgeHealth,
+  LaneInfo,
+  ModelOption,
+  Perspective,
+} from '../types.ts';
+import {
+  createProviderApi,
+  deleteProviderApi,
+  renameLaneApi,
+  testProviderApi,
+} from '../utils/api.ts';
+
+const QUICK_ROLE_TEMPLATES = [
+  {
+    label: 'Nghiên cứu',
+    handle: 'Nghiên_cứu',
+    role: 'Nghiên cứu & Tổng hợp bằng chứng',
+    tag: 'Nghiên_cứu',
+    prompt:
+      'Bạn phụ trách nghiên cứu chuyên sâu, đọc kỹ nguồn tài liệu [S#], phân tích có cấu trúc rõ ràng và mở đầu bằng "Kết luận: ...".',
+  },
+  {
+    label: 'Phản biện',
+    handle: 'Phản_biện',
+    role: 'Phản biện & Soi rủi ro',
+    tag: 'Phản_biện',
+    prompt:
+      'Bạn là người phản biện độc lập. Chỉ ra điểm mù, giả định yếu, lỗi âm thầm và rủi ro triển khai. Mở đầu bằng "Kết luận: ...".',
+  },
+  {
+    label: 'Kỹ thuật / Code',
+    handle: 'Kỹ_thuật',
+    role: 'Kiến trúc Kỹ thuật & Code',
+    tag: 'Kỹ_thuật',
+    prompt:
+      'Bạn là kỹ sư hệ thống. Tập trung vào thiết kế kiến trúc, hiệu năng, độ tin cậy và bảo trì lâu dài. Mở đầu bằng "Kết luận: ...".',
+  },
+  {
+    label: 'Thực tế / Chi phí',
+    handle: 'Chi_phí',
+    role: 'Đánh giá Chi phí & Khả thi',
+    tag: 'Kinh_tế',
+    prompt:
+      'Bạn đánh giá chi phí triển khai, thời gian, nhân sự và tính thực tế khi vận hành. Mở đầu bằng "Kết luận: ...".',
+  },
+];
 
 interface SettingsDrawerProps {
   open: boolean;
   onClose: () => void;
+  activeRoomTitle?: string;
   settings: AppSettings;
   onUpdateSettings: (patch: Partial<AppSettings>) => void;
   health: BridgeHealth | null;
-  onResetSeedRooms: () => void;
-  isResetting: boolean;
+  models: ModelOption[];
+  providers: AIProviderConfig[];
+  onRefreshProvidersAndModels: () => Promise<void>;
+  onAddPerspectiveToRoom: (p: Omit<Perspective, 'id'>) => void;
 }
+
+const KIND_LABELS: Record<AIProviderConfig['kind'], string> = {
+  bridge: 'DSH Gemini Bridge',
+  gemini_api: 'Gemini API Key',
+  openai_compat: 'OpenAI / DeepSeek / Groq / Ollama',
+};
 
 export function SettingsDrawer({
   open,
   onClose,
+  activeRoomTitle,
   settings,
   onUpdateSettings,
   health,
-  onResetSeedRooms,
-  isResetting,
+  models,
+  providers,
+  onRefreshProvidersAndModels,
+  onAddPerspectiveToRoom,
 }: SettingsDrawerProps) {
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [kind, setKind] = useState<AIProviderConfig['kind']>('gemini_api');
+  const [name, setName] = useState('');
+  const [baseUrl, setBaseUrl] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [defaultModel, setDefaultModel] = useState('gemini-2.5-flash');
+  const [roleTitle, setRoleTitle] = useState('Nghiên cứu & Phản biện');
+  const [alsoAddToRoom, setAlsoAddToRoom] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [formMsg, setFormMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [testingId, setTestingId] = useState<string | null>(null);
+  const [testResults, setTestResults] = useState<Record<string, { ok: boolean; text: string }>>({});
+
+  // Per-lane (acc1, acc2, acc3...) rename & assign-role state
+  const [renamingLaneId, setRenamingLaneId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
+  const [renameBusy, setRenameBusy] = useState(false);
+
+  const [assignLaneId, setAssignLaneId] = useState<string | null>(null);
+  const [assignHandle, setAssignHandle] = useState('');
+  const [assignRole, setAssignRole] = useState('');
+  const [assignPrompt, setAssignPrompt] = useState('');
+  const [assignTag, setAssignTag] = useState('Nghiên_cứu');
+  const [assignModel, setAssignModel] = useState('gemini-neon');
+
   if (!open) return null;
 
-  const healthyWorkers = health?.healthyWorkers ?? 4;
-  const overSubscribed = settings.maxConcurrency > healthyWorkers && healthyWorkers > 0;
+  const laneDetails: LaneInfo[] = health?.laneDetails?.length
+    ? health.laneDetails
+    : (health?.lanes || []).map((id) => ({
+        id,
+        name: id,
+        bridgeLabel: id,
+        url: '',
+        reachable: true,
+        control: 'on',
+        authOk: !health?.guestMode,
+        model: health?.defaultModel || 'gemini-4-hydrogen',
+        accountStatus: 'AVAILABLE',
+      }));
+
+  const bridgeModels = models.filter((m) => m.providerId === 'bridge-local');
+  const fallbackBridgeModels: ModelOption[] =
+    bridgeModels.length > 0
+      ? bridgeModels
+      : [
+          { id: 'gemini-neon', label: '4 Neon — Phân tích sâu hơn', providerId: 'bridge-local', providerName: 'Bridge' },
+          { id: 'gemini-carbon', label: '4 Carbon — Lập trình & Phức tạp', providerId: 'bridge-local', providerName: 'Bridge' },
+          { id: 'gemini-4-hydrogen', label: '4 Hydrogen — Trợ giúp hằng ngày', providerId: 'bridge-local', providerName: 'Bridge' },
+        ];
+
+  const handleSaveLaneName = async (laneId: string) => {
+    setRenameBusy(true);
+    setFormMsg(null);
+    try {
+      await renameLaneApi(laneId, renameDraft.trim());
+      await onRefreshProvidersAndModels();
+      setRenamingLaneId(null);
+      setFormMsg({
+        ok: true,
+        text: renameDraft.trim()
+          ? `Đã đặt tên ${laneId} thành "${renameDraft.trim()}".`
+          : `Đã đưa tên ${laneId} về mặc định.`,
+      });
+    } catch (err) {
+      setFormMsg({
+        ok: false,
+        text: err instanceof Error ? err.message : 'Không đổi được tên tài khoản.',
+      });
+    } finally {
+      setRenameBusy(false);
+    }
+  };
+
+  const openAssignForm = (lane: LaneInfo) => {
+    if (assignLaneId === lane.id) {
+      setAssignLaneId(null);
+      return;
+    }
+    const cleanDefaultHandle =
+      (lane.name && lane.name !== lane.id && lane.name !== lane.bridgeLabel ? lane.name : lane.id)
+        .replace(/[^a-zA-Z0-9_\u00C0-\u1EF9]+/g, '_')
+        .replace(/^_+|_+$/g, '') || lane.id;
+    setAssignLaneId(lane.id);
+    setAssignHandle(cleanDefaultHandle);
+    setAssignRole('Nghiên cứu & Phân tích');
+    setAssignTag('Nghiên_cứu');
+    setAssignPrompt(
+      'Bạn phụ trách nghiên cứu chuyên sâu, phân tích rõ luận điểm, trích dẫn [S#] khi có nguồn và mở đầu bằng "Kết luận: ...".'
+    );
+    setAssignModel(fallbackBridgeModels[0]?.id || 'gemini-neon');
+    setFormMsg(null);
+  };
+
+  const handleAssignLaneSubmit = (e: React.FormEvent, lane: LaneInfo) => {
+    e.preventDefault();
+    const cleanHandle =
+      assignHandle
+        .trim()
+        .replace(/^@/, '')
+        .replace(/\s+/g, '_') || lane.id;
+    const roleLabel = assignRole.trim() || `Chuyên gia (${lane.name || lane.id})`;
+    onAddPerspectiveToRoom({
+      handle: cleanHandle,
+      name: roleLabel,
+      rolePrompt:
+        assignPrompt.trim() ||
+        `Bạn đảm nhận vai trò "${roleLabel}". Phân tích rõ ràng, sắc bén và mở đầu bằng "Kết luận: ...".`,
+      tags: [assignTag.trim().replace(/^#/, '') || 'Nghiên_cứu'],
+      modelLabel: assignModel || 'gemini-neon',
+      providerId: 'bridge-local',
+      pinnedLaneId: lane.id,
+      colorIndex: (laneDetails.findIndex((l) => l.id === lane.id) + 1) % 10,
+      enabled: true,
+    });
+    setAssignLaneId(null);
+    setFormMsg({
+      ok: true,
+      text: `Đã bốc ${lane.id}${lane.name && lane.name !== lane.id ? ` (${lane.name})` : ''} vào phòng với vai @${cleanHandle} (${roleLabel}).`,
+    });
+  };
+
+  const healthyWorkers = health?.healthyWorkers ?? 0;
+  const totalWorkers = health?.totalWorkers ?? 0;
+  const overSubscribed = healthyWorkers > 0 && settings.maxConcurrency > healthyWorkers;
+
+  const handleKindChange = (nextKind: AIProviderConfig['kind']) => {
+    setKind(nextKind);
+    setFormMsg(null);
+    if (nextKind === 'bridge') {
+      setBaseUrl('http://127.0.0.1:10000');
+      setDefaultModel('gemini-neon');
+    } else if (nextKind === 'gemini_api') {
+      setBaseUrl('');
+      setDefaultModel('gemini-2.5-flash');
+    } else {
+      setBaseUrl('https://api.openai.com/v1');
+      setDefaultModel('gpt-4o-mini');
+    }
+  };
+
+  const handleCreateProvider = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubmitting(true);
+    setFormMsg(null);
+    try {
+      const res = await createProviderApi({
+        name: name.trim(),
+        kind,
+        baseUrl: baseUrl.trim() || undefined,
+        apiKey: apiKey.trim() || undefined,
+        defaultModel: defaultModel.trim() || undefined,
+      });
+      await onRefreshProvidersAndModels();
+
+      if (alsoAddToRoom) {
+        const cleanHandle = name
+          .trim()
+          .replace(/^@/, '')
+          .replace(/[^a-zA-Z0-9_\u00C0-\u1EF9]+/g, '_')
+          .replace(/^_+|_+$/g, '') || 'AI_Mới';
+        onAddPerspectiveToRoom({
+          handle: cleanHandle,
+          name: roleTitle.trim() || res.provider.name,
+          rolePrompt: `Bạn đảm nhận vai trò "${roleTitle.trim() || res.provider.name}". Phân tích khách quan, rõ luận điểm, trích dẫn [S#] khi có nguồn và mở đầu bằng "Kết luận: ...".`,
+          tags: [kind === 'bridge' ? 'Bridge' : 'API'],
+          modelLabel: res.provider.defaultModel || defaultModel.trim(),
+          providerId: res.provider.id,
+          colorIndex: providers.length % 10,
+          enabled: true,
+        });
+      }
+
+      setFormMsg({ ok: true, text: `Đã thêm "${res.provider.name}" (${res.provider.defaultModel}).` });
+      setName('');
+      setApiKey('');
+      setShowAddForm(false);
+    } catch (err) {
+      setFormMsg({
+        ok: false,
+        text: err instanceof Error ? err.message : 'Không thêm được nguồn AI.',
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleTest = async (providerId: string, laneId?: string) => {
+    const key = laneId ? `${providerId}::${laneId}` : providerId;
+    setTestingId(key);
+    try {
+      const res = await testProviderApi(providerId, laneId);
+      setTestResults((prev) => ({
+        ...prev,
+        [key]: {
+          ok: true,
+          text: `OK (${res.laneId || laneId || 'bridge'} · ${res.modelUsed} · ${res.elapsedSec}s): ${res.preview || 'Kết nối thành công'}`,
+        },
+      }));
+    } catch (err) {
+      setTestResults((prev) => ({
+        ...prev,
+        [key]: {
+          ok: false,
+          text: err instanceof Error ? err.message : 'Kết nối thất bại.',
+        },
+      }));
+    } finally {
+      setTestingId(null);
+    }
+  };
+
+  const handleDelete = async (providerId: string) => {
+    try {
+      await deleteProviderApi(providerId);
+      await onRefreshProvidersAndModels();
+    } catch (err) {
+      setFormMsg({
+        ok: false,
+        text: err instanceof Error ? err.message : 'Không xoá được nguồn AI.',
+      });
+    }
+  };
+
+  const selectedJudgeKey = `${settings.judgeProviderId || 'bridge-local'}::${settings.judgeModel || 'gemini-neon'}`;
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-black/30 backdrop-blur-[2px]">
+    <div className="fixed inset-0 z-50 flex justify-end bg-black/35 backdrop-blur-[2px]">
       <div
-        className="w-full max-w-[380px] h-full bg-[var(--surface)] border-l border-[var(--border)] shadow-[var(--shadow-float)] flex flex-col"
+        className="w-full max-w-[430px] h-full bg-[var(--surface)] border-l border-[var(--border)] shadow-[var(--shadow-float)] flex flex-col"
         role="dialog"
-        aria-label="Cài đặt kỹ thuật và luồng chạy"
+        aria-label="Cài đặt AI, Model và Điều phối"
       >
         <div className="px-5 py-4 border-b border-[var(--border)] flex items-center justify-between">
           <div>
             <h2 className="font-display text-lg font-semibold text-[var(--ink)]">
-              Cài đặt & Điều phối
+              Cài đặt AI & Model
             </h2>
             <p className="text-xs text-[var(--ink-muted)] mt-0.5">
-              Thông số kỹ thuật được gom gọn tại đây để thanh chính luôn thoáng.
+              Nạp AI qua Bridge cục bộ hoặc API Key và chọn model cho Trọng tài.
             </p>
           </div>
           <button
@@ -52,41 +347,530 @@ export function SettingsDrawer({
         </div>
 
         <div className="flex-1 overflow-y-auto p-5 space-y-6">
-          {/* Adapter / Bridge Health */}
-          <section className="space-y-2.5">
-            <div className="flex items-center gap-2 text-xs font-semibold text-[var(--ink)]">
-              <Cpu className="w-4 h-4 text-[var(--accent)]" />
-              Kết nối AI & Worker Lanes
+          {/* 1. AI Providers (Bridge + API Key) */}
+          <section className="space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-xs font-semibold text-[var(--ink)]">
+                <KeyRound className="w-4 h-4 text-[var(--accent)]" />
+                Nguồn AI đã kết nối ({providers.length})
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => onRefreshProvidersAndModels()}
+                  title="Tải lại danh sách model và luồng Bridge"
+                  className="p-1.5 rounded-lg border border-[var(--border)] text-[var(--ink-secondary)] hover:text-[var(--ink)] hover:border-[var(--accent)] cursor-pointer"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAddForm((v) => !v);
+                    setFormMsg(null);
+                  }}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-[var(--accent)] text-[var(--accent-ink)] text-xs font-semibold hover:bg-[var(--accent-hover)] cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  Thêm AI
+                </button>
+              </div>
             </div>
-            <div className="p-3.5 rounded-xl bg-[var(--bg)] border border-[var(--border)] space-y-2 text-xs">
-              <div className="flex items-center justify-between">
-                <span className="text-[var(--ink-secondary)]">Chế độ Adapter</span>
-                <span className="font-mono-num font-medium text-[var(--ink)]">
-                  {health?.mode === 'bridge' ? 'dsh-gemini-bridge' : 'AI Studio Server'}
-                </span>
+
+            {formMsg && (
+              <div
+                className={`p-2.5 rounded-lg text-xs border ${
+                  formMsg.ok
+                    ? 'bg-[var(--ok-soft)] text-[var(--ok)] border-[var(--ok)]/30'
+                    : 'bg-[var(--danger-soft)] text-[var(--danger)] border-[var(--danger)]/30'
+                }`}
+              >
+                {formMsg.text}
               </div>
-              <div className="flex items-center justify-between">
-                <span className="text-[var(--ink-secondary)]">Số worker khỏe</span>
-                <span className="font-mono-num font-medium text-[var(--ok)]">
-                  {health ? `${health.healthyWorkers}/${health.totalWorkers} worker` : 'Đang kiểm tra…'}
-                </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-[var(--ink-secondary)]">Mô hình mặc định</span>
-                <span className="font-mono-num text-[var(--ink)]">
-                  {health?.defaultModel ?? 'gemini-4-hydrogen'}
-                </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-[var(--ink-secondary)]">Lưu trữ phiên</span>
-                <span className="font-mono-num text-[var(--ink-secondary)]">
-                  events.jsonl + sources.json
-                </span>
-              </div>
+            )}
+
+            {/* Add AI form */}
+            {showAddForm && (
+              <form
+                onSubmit={handleCreateProvider}
+                className="p-3.5 rounded-xl bg-[var(--bg)] border border-[var(--accent)]/50 space-y-2.5 text-xs"
+              >
+                <div className="font-semibold text-[var(--ink)]">Nạp nguồn AI mới</div>
+
+                <div className="grid grid-cols-3 gap-1.5">
+                  {(
+                    [
+                      { id: 'bridge', label: 'Bridge cục bộ' },
+                      { id: 'gemini_api', label: 'Gemini API' },
+                      { id: 'openai_compat', label: 'OpenAI / Khác' },
+                    ] as const
+                  ).map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => handleKindChange(opt.id)}
+                      className={`py-1.5 px-2 rounded-lg font-medium border transition-colors cursor-pointer ${
+                        kind === opt.id
+                          ? 'bg-[var(--accent)] text-[var(--accent-ink)] border-[var(--accent)]'
+                          : 'bg-[var(--surface)] text-[var(--ink-secondary)] border-[var(--border)] hover:text-[var(--ink)]'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div>
+                  <label className="block text-[11px] text-[var(--ink-muted)] mb-1">
+                    Tên AI (hiển thị trong danh sách)
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder={
+                      kind === 'bridge'
+                        ? 'vd: Gemini_Bridge_Phụ'
+                        : kind === 'gemini_api'
+                        ? 'vd: Gemini_API_Chính'
+                        : 'vd: DeepSeek_R1 hoặc Ollama_Local'
+                    }
+                    className="w-full px-2.5 py-1.5 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-[var(--ink)] focus:outline-none focus:border-[var(--accent)]"
+                  />
+                </div>
+
+                {kind !== 'gemini_api' && (
+                  <div>
+                    <label className="block text-[11px] text-[var(--ink-muted)] mb-1">
+                      {kind === 'bridge' ? 'URL Bridge (Gateway hoặc worker riêng)' : 'Base URL API'}
+                    </label>
+                    <input
+                      type="text"
+                      required={kind === 'openai_compat'}
+                      value={baseUrl}
+                      onChange={(e) => setBaseUrl(e.target.value)}
+                      placeholder={
+                        kind === 'bridge'
+                          ? 'http://127.0.0.1:10000'
+                          : 'https://api.deepseek.com/v1 hoặc http://127.0.0.1:11434/v1'
+                      }
+                      className="w-full px-2.5 py-1.5 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-[var(--ink)] font-mono-num focus:outline-none focus:border-[var(--accent)]"
+                    />
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-[11px] text-[var(--ink-muted)] mb-1">
+                    API Key {kind === 'bridge' ? '(tùy chọn)' : kind === 'openai_compat' ? '(để trống nếu dùng Ollama cục bộ)' : '(bắt buộc)'}
+                  </label>
+                  <input
+                    type="password"
+                    required={kind === 'gemini_api'}
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    placeholder={kind === 'gemini_api' ? 'AIza...' : 'sk-...'}
+                    className="w-full px-2.5 py-1.5 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-[var(--ink)] font-mono-num focus:outline-none focus:border-[var(--accent)]"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[11px] text-[var(--ink-muted)] mb-1">Model mặc định</label>
+                    <input
+                      type="text"
+                      required
+                      value={defaultModel}
+                      onChange={(e) => setDefaultModel(e.target.value)}
+                      placeholder="vd: gemini-neon"
+                      className="w-full px-2.5 py-1.5 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-[var(--ink)] font-mono-num focus:outline-none focus:border-[var(--accent)]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-[var(--ink-muted)] mb-1">Vai trò khi thêm phòng</label>
+                    <input
+                      type="text"
+                      value={roleTitle}
+                      onChange={(e) => setRoleTitle(e.target.value)}
+                      placeholder="vd: Soi rủi ro & Phản biện"
+                      className="w-full px-2.5 py-1.5 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-[var(--ink)] focus:outline-none focus:border-[var(--accent)]"
+                    />
+                  </div>
+                </div>
+
+                <label className="flex items-center gap-2 pt-1 text-[var(--ink-secondary)] cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={alsoAddToRoom}
+                    onChange={(e) => setAlsoAddToRoom(e.target.checked)}
+                    className="accent-[var(--accent)]"
+                  />
+                  <span>Thêm luôn làm 1 luồng AI trong phòng đang mở</span>
+                </label>
+
+                <div className="flex justify-end gap-1.5 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setShowAddForm(false)}
+                    className="px-2.5 py-1.5 rounded-lg text-[var(--ink-secondary)] hover:bg-[var(--bg-subtle)] cursor-pointer"
+                  >
+                    Hủy
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={submitting}
+                    className="px-3 py-1.5 rounded-lg bg-[var(--accent)] text-[var(--accent-ink)] font-semibold hover:bg-[var(--accent-hover)] disabled:opacity-50 cursor-pointer"
+                  >
+                    {submitting ? 'Đang lưu...' : 'Lưu nguồn AI'}
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {/* List of connected providers */}
+            <div className="space-y-2">
+              {providers.map((p) => {
+                const test = testResults[p.id];
+                const isDefaultBridge = p.id === 'bridge-local';
+                return (
+                  <div
+                    key={p.id}
+                    className="p-3 rounded-xl bg-[var(--bg)] border border-[var(--border)] space-y-1.5 text-xs"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="font-semibold text-[var(--ink)] flex items-center gap-1.5">
+                          <Cpu className="w-3.5 h-3.5 text-[var(--accent)] shrink-0" />
+                          <span className="truncate">{p.name}</span>
+                        </div>
+                        <div className="text-[11px] text-[var(--ink-muted)] mt-0.5">
+                          {KIND_LABELS[p.kind]} · <span className="font-mono-num">{p.defaultModel}</span>
+                        </div>
+                        {isDefaultBridge && health && (
+                          <div className="text-[11px] mt-1 font-mono-num text-[var(--ok)] flex items-center gap-1">
+                            <CheckCircle2 className="w-3 h-3" />
+                            {health.healthyWorkers}/{health.totalWorkers} luồng đã đăng nhập ({health.lanes.join(', ')})
+                          </div>
+                        )}
+                        {!isDefaultBridge && p.hasApiKey && (
+                          <div className="text-[11px] text-[var(--ink-muted)] font-mono-num mt-0.5">
+                            Key: {p.apiKeyMasked}
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          disabled={testingId === p.id}
+                          onClick={() => handleTest(p.id)}
+                          className="px-2 py-1 rounded-md border border-[var(--border)] bg-[var(--surface)] text-[11px] font-medium text-[var(--ink-secondary)] hover:border-[var(--accent)] hover:text-[var(--ink)] disabled:opacity-50 cursor-pointer"
+                        >
+                          {testingId === p.id ? 'Đang thử...' : 'Test'}
+                        </button>
+                        {!p.builtin && (
+                          <button
+                            type="button"
+                            onClick={() => handleDelete(p.id)}
+                            title="Xóa nguồn AI này"
+                            className="p-1 rounded-md text-[var(--ink-muted)] hover:text-[var(--danger)] cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    {test && (
+                      <div
+                        className={`text-[11px] px-2 py-1 rounded-md ${
+                          test.ok ? 'bg-[var(--ok-soft)] text-[var(--ok)]' : 'bg-[var(--danger-soft)] text-[var(--danger)]'
+                        }`}
+                      >
+                        {test.text}
+                      </div>
+                    )}
+
+                    {/* Individual Bridge Accounts (acc1, acc2, acc3...) — Rename & Assign directly to a Role */}
+                    {isDefaultBridge && laneDetails.length > 0 && (
+                      <div className="pt-2 mt-2 border-t border-[var(--border)] space-y-2">
+                        <div className="text-[11px] font-medium text-[var(--ink-secondary)]">
+                          Từng tài khoản Bridge — đặt tên riêng & bốc gán vai trò cụ thể:
+                        </div>
+                        {laneDetails.map((lane) => {
+                          const isRenaming = renamingLaneId === lane.id;
+                          const isAssigning = assignLaneId === lane.id;
+                          const laneTestKey = `${p.id}::${lane.id}`;
+                          const laneTest = testResults[laneTestKey];
+                          const isReady = lane.reachable && lane.control === 'on' && lane.authOk;
+
+                          return (
+                            <div
+                              key={lane.id}
+                              className="p-2.5 rounded-lg bg-[var(--surface)] border border-[var(--border)] space-y-2"
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-1.5">
+                                    <span
+                                      className="w-2 h-2 rounded-full shrink-0"
+                                      style={{
+                                        backgroundColor: isReady
+                                          ? 'var(--ok)'
+                                          : lane.control === 'on'
+                                          ? 'var(--warn)'
+                                          : 'var(--ink-muted)',
+                                      }}
+                                    />
+                                    <span className="font-mono-num text-[11px] px-1.5 py-0.5 rounded bg-[var(--bg-subtle)] text-[var(--accent)] font-semibold shrink-0">
+                                      {lane.id}
+                                    </span>
+                                    <span className="font-medium text-[12px] text-[var(--ink)] truncate">
+                                      {lane.name}
+                                    </span>
+                                  </div>
+                                  <div className="text-[10.5px] text-[var(--ink-muted)] mt-0.5 font-mono-num">
+                                    {isReady
+                                      ? 'Đã đăng nhập Cookie'
+                                      : lane.control !== 'on'
+                                      ? 'Đang TẮT'
+                                      : 'Chế độ Khách'}
+                                    {lane.url ? ` · ${lane.url.replace(/^https?:\/\//, '')}` : ''}
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center gap-1 shrink-0">
+                                  <button
+                                    type="button"
+                                    title="Đặt tên gợi nhớ cho tài khoản này"
+                                    onClick={() => {
+                                      if (isRenaming) {
+                                        setRenamingLaneId(null);
+                                      } else {
+                                        setRenamingLaneId(lane.id);
+                                        setRenameDraft(lane.name === lane.bridgeLabel ? '' : lane.name);
+                                      }
+                                    }}
+                                    className="px-2 py-1 rounded-md border border-[var(--border)] bg-[var(--bg)] text-[11px] text-[var(--ink-secondary)] hover:text-[var(--ink)] hover:border-[var(--accent)] inline-flex items-center gap-1 cursor-pointer"
+                                  >
+                                    <Edit3 className="w-3 h-3" />
+                                    Tên
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={testingId === laneTestKey}
+                                    onClick={() => handleTest(p.id, lane.id)}
+                                    title={`Kiểm tra riêng ${lane.id}`}
+                                    className="px-2 py-1 rounded-md border border-[var(--border)] bg-[var(--bg)] text-[11px] text-[var(--ink-secondary)] hover:text-[var(--ink)] hover:border-[var(--accent)] disabled:opacity-50 cursor-pointer"
+                                  >
+                                    {testingId === laneTestKey ? '...' : 'Test'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => openAssignForm(lane)}
+                                    className={`px-2 py-1 rounded-md text-[11px] font-semibold inline-flex items-center gap-1 cursor-pointer ${
+                                      isAssigning
+                                        ? 'bg-[var(--accent)] text-[var(--accent-ink)]'
+                                        : 'bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent)] hover:text-[var(--accent-ink)]'
+                                    }`}
+                                  >
+                                    <UserPlus className="w-3 h-3" />
+                                    Gán vai
+                                  </button>
+                                </div>
+                              </div>
+
+                              {/* Inline rename input */}
+                              {isRenaming && (
+                                <div className="flex items-center gap-1.5 pt-1">
+                                  <input
+                                    type="text"
+                                    value={renameDraft}
+                                    onChange={(e) => setRenameDraft(e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') {
+                                        e.preventDefault();
+                                        handleSaveLaneName(lane.id);
+                                      } else if (e.key === 'Escape') {
+                                        setRenamingLaneId(null);
+                                      }
+                                    }}
+                                    placeholder={`vd: Acc Nghiên cứu, Acc Code (${lane.bridgeLabel})`}
+                                    autoFocus
+                                    className="flex-1 px-2 py-1 rounded-md bg-[var(--bg)] border border-[var(--accent)] text-[11.5px] text-[var(--ink)] focus:outline-none"
+                                  />
+                                  <button
+                                    type="button"
+                                    disabled={renameBusy}
+                                    onClick={() => handleSaveLaneName(lane.id)}
+                                    className="px-2.5 py-1 rounded-md bg-[var(--accent)] text-[var(--accent-ink)] text-[11px] font-semibold disabled:opacity-50 cursor-pointer"
+                                  >
+                                    Lưu
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setRenamingLaneId(null)}
+                                    className="px-1.5 py-1 rounded-md text-[11px] text-[var(--ink-muted)] hover:text-[var(--ink)] cursor-pointer"
+                                  >
+                                    Hủy
+                                  </button>
+                                </div>
+                              )}
+
+                              {/* Inline role-assignment form pinned to this exact acc */}
+                              {isAssigning && (
+                                <form
+                                  onSubmit={(e) => handleAssignLaneSubmit(e, lane)}
+                                  className="p-2.5 rounded-lg bg-[var(--bg)] border border-[var(--accent)]/50 space-y-2"
+                                >
+                                  <div className="text-[11px] font-semibold text-[var(--accent)]">
+                                    Gán riêng {lane.id} ({lane.name}) vào phòng
+                                    {activeRoomTitle ? ` "${activeRoomTitle.slice(0, 32)}"` : ' đang mở'}
+                                  </div>
+                                  <div className="flex flex-wrap gap-1">
+                                    {QUICK_ROLE_TEMPLATES.map((tpl) => (
+                                      <button
+                                        key={tpl.handle}
+                                        type="button"
+                                        onClick={() => {
+                                          setAssignHandle(tpl.handle);
+                                          setAssignRole(tpl.role);
+                                          setAssignTag(tpl.tag);
+                                          setAssignPrompt(tpl.prompt);
+                                        }}
+                                        className="px-2 py-0.5 rounded bg-[var(--surface)] border border-[var(--border)] text-[10.5px] text-[var(--ink-secondary)] hover:border-[var(--accent)] hover:text-[var(--ink)] cursor-pointer"
+                                      >
+                                        + {tpl.label}
+                                      </button>
+                                    ))}
+                                  </div>
+                                  <div className="grid grid-cols-2 gap-1.5">
+                                    <input
+                                      type="text"
+                                      required
+                                      value={assignHandle}
+                                      onChange={(e) => setAssignHandle(e.target.value)}
+                                      placeholder="Tên @AI (vd: Nghiên_cứu)"
+                                      className="px-2 py-1 rounded-md bg-[var(--surface)] border border-[var(--border)] text-[11.5px] text-[var(--ink)] focus:outline-none focus:border-[var(--accent)]"
+                                    />
+                                    <input
+                                      type="text"
+                                      value={assignRole}
+                                      onChange={(e) => setAssignRole(e.target.value)}
+                                      placeholder="Vai trò cụ thể"
+                                      className="px-2 py-1 rounded-md bg-[var(--surface)] border border-[var(--border)] text-[11.5px] text-[var(--ink)] focus:outline-none focus:border-[var(--accent)]"
+                                    />
+                                  </div>
+                                  <select
+                                    value={assignModel}
+                                    onChange={(e) => setAssignModel(e.target.value)}
+                                    className="w-full px-2 py-1 rounded-md bg-[var(--surface)] border border-[var(--border)] text-[11.5px] text-[var(--ink)] focus:outline-none focus:border-[var(--accent)] cursor-pointer"
+                                  >
+                                    {fallbackBridgeModels.map((m) => (
+                                      <option key={m.id} value={m.id}>
+                                        Model: {m.label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  <textarea
+                                    rows={2}
+                                    value={assignPrompt}
+                                    onChange={(e) => setAssignPrompt(e.target.value)}
+                                    placeholder="Chỉ dẫn vai trò cụ thể cho tài khoản này..."
+                                    className="w-full px-2 py-1 rounded-md bg-[var(--surface)] border border-[var(--border)] text-[11px] text-[var(--ink)] focus:outline-none focus:border-[var(--accent)] resize-none"
+                                  />
+                                  <div className="flex justify-end gap-1.5">
+                                    <button
+                                      type="button"
+                                      onClick={() => setAssignLaneId(null)}
+                                      className="px-2 py-1 rounded text-[11px] text-[var(--ink-muted)] hover:text-[var(--ink)] cursor-pointer"
+                                    >
+                                      Hủy
+                                    </button>
+                                    <button
+                                      type="submit"
+                                      className="px-2.5 py-1 rounded-md bg-[var(--accent)] text-[var(--accent-ink)] text-[11px] font-semibold cursor-pointer"
+                                    >
+                                      Gán {lane.id} vào phòng
+                                    </button>
+                                  </div>
+                                </form>
+                              )}
+
+                              {laneTest && (
+                                <div
+                                  className={`text-[10.5px] px-2 py-1 rounded ${
+                                    laneTest.ok
+                                      ? 'bg-[var(--ok-soft)] text-[var(--ok)]'
+                                      : 'bg-[var(--danger-soft)] text-[var(--danger)]'
+                                  }`}
+                                >
+                                  {laneTest.text}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </section>
 
-          {/* Max concurrency */}
+          {/* 2. Judge Model Selector */}
+          <section className="space-y-2">
+            <label
+              htmlFor="judge-model-select"
+              className="flex items-center gap-2 text-xs font-semibold text-[var(--ink)]"
+            >
+              <Scale className="w-4 h-4 text-[var(--accent)]" />
+              Model cho Trọng tài (Judge tổng hợp & chấm điểm)
+            </label>
+            <select
+              id="judge-model-select"
+              value={selectedJudgeKey}
+              onChange={(e) => {
+                const [pid, mid] = e.target.value.split('::');
+                onUpdateSettings({ judgeProviderId: pid, judgeModel: mid });
+              }}
+              className="w-full px-3 py-2 rounded-xl bg-[var(--bg)] border border-[var(--border)] text-xs text-[var(--ink)] focus:outline-none focus:border-[var(--accent)] cursor-pointer"
+            >
+              {models.map((m) => (
+                <option key={`${m.providerId}::${m.id}`} value={`${m.providerId}::${m.id}`}>
+                  [{m.providerName}] {m.label}
+                </option>
+              ))}
+            </select>
+
+            {(settings.judgeProviderId || 'bridge-local') === 'bridge-local' && laneDetails.length > 0 && (
+              <div className="pt-1 space-y-1">
+                <label
+                  htmlFor="judge-lane-select"
+                  className="block text-[11px] font-medium text-[var(--ink-secondary)]"
+                >
+                  Tài khoản Bridge (acc) riêng cho Trọng tài
+                </label>
+                <select
+                  id="judge-lane-select"
+                  value={settings.judgeLaneId || ''}
+                  onChange={(e) => onUpdateSettings({ judgeLaneId: e.target.value })}
+                  className="w-full px-3 py-2 rounded-xl bg-[var(--bg)] border border-[var(--border)] text-xs text-[var(--ink)] focus:outline-none focus:border-[var(--accent)] cursor-pointer"
+                >
+                  <option value="">Tự động (Bridge tự chọn luồng rảnh)</option>
+                  {laneDetails.map((l) => (
+                    <option key={l.id} value={l.id}>
+                      {l.id} — {l.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <p className="text-[11px] text-[var(--ink-muted)]">
+              Gợi ý: chọn <strong>4 Neon (Phân tích sâu hơn)</strong> cho Trọng tài để tổng hợp lập luận và bắt lỗ hổng sắc bén hơn.
+            </p>
+          </section>
+
+          {/* 3. Max concurrency */}
           <section className="space-y-2.5">
             <div className="flex items-center justify-between">
               <label
@@ -112,20 +896,21 @@ export function SettingsDrawer({
             <div className="flex justify-between text-[11px] font-mono-num text-[var(--ink-muted)]">
               <span>1 (tuần tự)</span>
               <span>2</span>
+              <span>3</span>
               <span>4</span>
-              <span>6 (tối đa)</span>
+              <span>6</span>
             </div>
             {overSubscribed && (
               <div className="p-2.5 rounded-lg bg-[var(--warn-soft)] text-[var(--warn)] text-xs flex items-start gap-2">
                 <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
                 <span>
-                  Bạn đang đặt {settings.maxConcurrency} luồng vượt quá {healthyWorkers} worker khỏe. Khi nối dsh-gemini-bridge có thể gặp chờ khóa 429 bridge_busy.
+                  Bạn đang đặt {settings.maxConcurrency} luồng vượt quá {healthyWorkers}/{totalWorkers} luồng Bridge đã đăng nhập.
                 </span>
               </div>
             )}
           </section>
 
-          {/* Research & Judge behavior toggles */}
+          {/* 4. Research & Judge behavior toggles */}
           <section className="space-y-3">
             <div className="flex items-center gap-2 text-xs font-semibold text-[var(--ink)]">
               <ShieldCheck className="w-4 h-4 text-[var(--accent)]" />
@@ -155,7 +940,7 @@ export function SettingsDrawer({
                   Ẩn danh góc nhìn khi vào Trọng tài
                 </div>
                 <div className="text-[11.5px] text-[var(--ink-muted)] mt-0.5">
-                  Che tên thật thành Ứng viên A/B/C và gắn biểu tượng mặt nạ trên Flow Map.
+                  Che tên thật thành Ứng viên A/B/C để Trọng tài đánh giá khách quan.
                 </div>
               </div>
               <input
@@ -165,51 +950,6 @@ export function SettingsDrawer({
                 className="mt-1 w-4 h-4 accent-[var(--accent)] cursor-pointer"
               />
             </label>
-          </section>
-
-          {/* Test auto-hiding Bridge Alert Strip */}
-          <section className="space-y-2">
-            <div className="text-xs font-semibold text-[var(--ink)]">
-              Kiểm thử dải cảnh báo Bridge tự ẩn
-            </div>
-            <p className="text-[11.5px] text-[var(--ink-muted)]">
-              Bình thường dải cảnh báo ẩn hoàn toàn. Bạn có thể bật thử để xem cách nó xuất hiện khi có sự cố:
-            </p>
-            <div className="grid grid-cols-3 gap-1.5">
-              {(
-                [
-                  { id: 'none', label: 'Bình thường' },
-                  { id: 'offline', label: 'Bridge tắt' },
-                  { id: 'guest', label: 'Guest Mode' },
-                ] as const
-              ).map((opt) => (
-                <button
-                  key={opt.id}
-                  type="button"
-                  onClick={() => onUpdateSettings({ simulateBridgeAlert: opt.id })}
-                  className={`py-1.5 px-2 rounded-lg text-xs font-medium border transition-colors cursor-pointer ${
-                    settings.simulateBridgeAlert === opt.id
-                      ? 'bg-[var(--accent)] text-[var(--accent-ink)] border-[var(--accent)]'
-                      : 'bg-[var(--bg)] text-[var(--ink-secondary)] border-[var(--border)] hover:text-[var(--ink)]'
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-          </section>
-
-          {/* Reset seed data */}
-          <section className="pt-3 border-t border-[var(--border)]">
-            <button
-              type="button"
-              disabled={isResetting}
-              onClick={onResetSeedRooms}
-              className="w-full py-2.5 px-3 rounded-lg border border-[var(--border)] bg-[var(--bg)] hover:border-[var(--danger)] hover:text-[var(--danger)] text-xs font-medium text-[var(--ink-secondary)] flex items-center justify-center gap-2 transition-colors disabled:opacity-50 cursor-pointer"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              {isResetting ? 'Đang khôi phục…' : 'Khôi phục 3 phòng mẫu ban đầu'}
-            </button>
           </section>
         </div>
       </div>

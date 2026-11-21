@@ -1,10 +1,11 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   ArrowLeftRight,
   ChevronDown,
   ChevronUp,
   Clock,
+  Edit3,
   MessageCircle,
   Pin,
   Plus,
@@ -12,8 +13,8 @@ import {
   Square,
   Users,
 } from 'lucide-react';
-import type { ChatMessage, Perspective, Room } from '../types.ts';
-import { getPerspectiveColorVar } from '../utils/themeAndExport.ts';
+import type { ChatMessage, LaneInfo, Perspective, Room } from '../types.ts';
+import { formatLaneDisplay, getPerspectiveColorVar } from '../utils/themeAndExport.ts';
 import { MarkdownText } from './MarkdownText.tsx';
 
 export interface ActiveLaneJob {
@@ -28,8 +29,10 @@ export interface ActiveLaneJob {
 
 interface GroupFeedProps {
   room: Room;
+  laneDetails?: LaneInfo[];
   activeJobs: ActiveLaneJob[];
   nowMs: number;
+  onRenameRoom?: (newTitle: string) => void;
   onStopRunning: () => void;
   onCitationClick: (sourceId: string) => void;
   onTogglePerspective: (perspectiveId: string) => void;
@@ -42,8 +45,10 @@ interface GroupFeedProps {
 
 export function GroupFeed({
   room,
+  laneDetails = [],
   activeJobs,
   nowMs,
+  onRenameRoom,
   onStopRunning,
   onCitationClick,
   onTogglePerspective,
@@ -53,6 +58,12 @@ export function GroupFeed({
   onComparePerspective,
   onOpenCompare,
 }: GroupFeedProps) {
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(room.title);
+  useEffect(() => {
+    setEditingTitle(false);
+    setTitleDraft(room.title);
+  }, [room.id, room.title]);
   const enabledPerspectives = room.perspectives.filter((p) => p.enabled);
   const totalN = room.perspectives.length;
   const activeCount = enabledPerspectives.length;
@@ -108,9 +119,61 @@ export function GroupFeed({
       <div className="mx-auto max-w-[78ch] space-y-6">
         {/* Room Editorial Header */}
         <header className="space-y-3 pb-4 border-b border-[var(--border)]">
-          <h1 className="font-display text-2xl sm:text-[26px] font-semibold leading-tight text-[var(--ink)] [text-wrap:balance]">
-            {room.title}
-          </h1>
+          {editingTitle ? (
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={titleDraft}
+                onChange={(e) => setTitleDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && titleDraft.trim()) {
+                    onRenameRoom?.(titleDraft.trim());
+                    setEditingTitle(false);
+                  } else if (e.key === 'Escape') {
+                    setEditingTitle(false);
+                  }
+                }}
+                autoFocus
+                className="flex-1 font-display text-xl sm:text-2xl font-semibold px-3 py-1 rounded-lg bg-[var(--surface)] border border-[var(--accent)] text-[var(--ink)] focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  if (titleDraft.trim()) onRenameRoom?.(titleDraft.trim());
+                  setEditingTitle(false);
+                }}
+                className="px-3 py-1.5 rounded-lg bg-[var(--accent)] text-[var(--accent-ink)] text-xs font-semibold cursor-pointer"
+              >
+                Lưu
+              </button>
+              <button
+                type="button"
+                onClick={() => setEditingTitle(false)}
+                className="px-2.5 py-1.5 rounded-lg text-xs text-[var(--ink-muted)] hover:text-[var(--ink)] cursor-pointer"
+              >
+                Hủy
+              </button>
+            </div>
+          ) : (
+            <div className="group flex items-start gap-2">
+              <h1 className="font-display text-2xl sm:text-[26px] font-semibold leading-tight text-[var(--ink)] [text-wrap:balance]">
+                {room.title}
+              </h1>
+              {onRenameRoom && (
+                <button
+                  type="button"
+                  title="Đổi tên phòng nghiên cứu"
+                  onClick={() => {
+                    setTitleDraft(room.title);
+                    setEditingTitle(true);
+                  }}
+                  className="mt-1 p-1.5 rounded-md text-[var(--ink-muted)] hover:text-[var(--accent)] hover:bg-[var(--bg-subtle)] opacity-70 group-hover:opacity-100 transition-opacity cursor-pointer"
+                >
+                  <Edit3 className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          )}
 
           {/* Adaptive Perspective Control Bar */}
           {totalN === 1 ? (
@@ -361,7 +424,7 @@ export function GroupFeed({
                                 ·
                               </span>
                               <span className="font-mono-num text-[var(--ink-muted)]">
-                                {msg.laneId}
+                                {formatLaneDisplay(msg.laneId, laneDetails)}
                               </span>
                             </>
                           )}
@@ -524,7 +587,9 @@ export function GroupFeed({
                           <span aria-hidden="true" className="text-[var(--ink-muted)]">
                             ·
                           </span>
-                          <span className="font-mono-num text-[var(--ink-muted)]">{job.laneId}</span>
+                          <span className="font-mono-num text-[var(--ink-muted)]">
+                            {formatLaneDisplay(job.laneId, laneDetails)}
+                          </span>
                         </div>
                         <p className="text-xs text-[var(--ink-secondary)] mt-1">
                           {job.status === 'running'

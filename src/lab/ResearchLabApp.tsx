@@ -5,15 +5,19 @@ import {
   BookOpen,
   Moon,
   PanelLeft,
+  Plus,
+  Scale,
   Settings,
   Sun,
   X,
 } from 'lucide-react';
 import type {
+  AIProviderConfig,
   AppSettings,
   BridgeHealth,
   ChatMessage,
   LabViewTab,
+  ModelOption,
   Perspective,
   PerspectivePreset,
   Room,
@@ -25,14 +29,17 @@ import {
   deleteRoomApi,
   emitFlowEventApi,
   fetchHealth,
+  fetchModels,
+  fetchProviders,
   fetchRooms,
   patchRoomApi,
-  resetSeedRoomsApi,
   runPerspectiveApi,
   runSynthesizeApi,
   searchResearchApi,
 } from '../utils/api.ts';
 import {
+  formatLaneDisplay,
+  getPerspectiveColorVar,
   loadPanelPrefs,
   loadPresets,
   loadSettings,
@@ -61,7 +68,7 @@ export function ResearchLabApp({
   initialRoomId,
 }: ResearchLabAppProps) {
   const [rooms, setRooms] = useState<Room[]>([]);
-  const [activeRoomId, setActiveRoomId] = useState<string>(initialRoomId || 'room-rag-ft');
+  const [activeRoomId, setActiveRoomId] = useState<string>(initialRoomId || '');
   const [loading, setLoading] = useState(true);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
 
@@ -79,31 +86,48 @@ export function ResearchLabApp({
   const [presets, setPresets] = useState<PerspectivePreset[]>(loadPresets);
   const [settings, setSettings] = useState<AppSettings>(loadSettings);
   const [health, setHealth] = useState<BridgeHealth | null>(null);
+  const [models, setModels] = useState<ModelOption[]>([]);
+  const [providers, setProviders] = useState<AIProviderConfig[]>([]);
   const [composerText, setComposerText] = useState('');
 
   const [activeJobs, setActiveJobs] = useState<ActiveLaneJob[]>([]);
   const [isBusy, setIsBusy] = useState(false);
-  const [isResetting, setIsResetting] = useState(false);
   const [nowMs, setNowMs] = useState(Date.now());
   const abortRef = useRef<AbortController | null>(null);
 
   const activeRoom = rooms.find((r) => r.id === activeRoomId) || rooms[0] || null;
 
-  // Load rooms and health from disk-backed Express API
+  const refreshProvidersAndModels = useCallback(async () => {
+    const [healthRes, modelsRes, providersRes] = await Promise.all([
+      fetchHealth().catch(() => null),
+      fetchModels().catch(() => ({ models: [] })),
+      fetchProviders().catch(() => ({ providers: [] })),
+    ]);
+    if (healthRes) setHealth(healthRes);
+    setModels(modelsRes.models || []);
+    setProviders(providersRes.providers || []);
+  }, []);
+
+  // Load rooms, health, live models, and providers on mount
   useEffect(() => {
     let alive = true;
-    Promise.all([fetchRooms(), fetchHealth()])
-      .then(([roomsRes, healthRes]) => {
+    Promise.all([
+      fetchRooms(),
+      fetchHealth().catch(() => null),
+      fetchModels().catch(() => ({ models: [] })),
+      fetchProviders().catch(() => ({ providers: [] })),
+    ])
+      .then(([roomsRes, healthRes, modelsRes, providersRes]) => {
         if (!alive) return;
         setRooms(roomsRes.rooms);
         if (initialRoomId && roomsRes.rooms.some((r) => r.id === initialRoomId)) {
           setActiveRoomId(initialRoomId);
-        } else if (roomsRes.rooms.some((r) => r.id === 'room-rag-ft')) {
-          setActiveRoomId('room-rag-ft');
         } else if (roomsRes.rooms[0]) {
           setActiveRoomId(roomsRes.rooms[0].id);
         }
-        setHealth(healthRes);
+        if (healthRes) setHealth(healthRes);
+        setModels(modelsRes.models || []);
+        setProviders(providersRes.providers || []);
       })
       .catch((err) => {
         if (!alive) return;
@@ -195,6 +219,14 @@ export function ResearchLabApp({
     }
   };
 
+  const handleRenameRoom = async (roomId: string, newTitle: string) => {
+    const clean = newTitle.trim();
+    if (!clean) return;
+    const target = rooms.find((r) => r.id === roomId);
+    if (!target) return;
+    await persistRoom({ ...target, title: clean });
+  };
+
   const handleDeleteRoom = async (roomId: string) => {
     try {
       await deleteRoomApi(roomId);
@@ -240,6 +272,24 @@ export function ResearchLabApp({
     persistRoom({
       ...activeRoom,
       perspectives: [...activeRoom.perspectives, nextRole],
+    });
+  };
+
+  const handleUpdatePerspective = (perspectiveId: string, patch: Partial<Perspective>) => {
+    if (!activeRoom) return;
+    persistRoom({
+      ...activeRoom,
+      perspectives: activeRoom.perspectives.map((p) =>
+        p.id === perspectiveId ? { ...p, ...patch } : p
+      ),
+    });
+  };
+
+  const handleRemovePerspective = (perspectiveId: string) => {
+    if (!activeRoom || activeRoom.perspectives.length <= 1) return;
+    persistRoom({
+      ...activeRoom,
+      perspectives: activeRoom.perspectives.filter((p) => p.id !== perspectiveId),
     });
   };
 
@@ -367,7 +417,7 @@ export function ResearchLabApp({
       perspectiveId: t.id,
       handle: t.handle,
       colorIndex: t.colorIndex,
-      laneId: lanes[idx % lanes.length],
+      laneId: t.pinnedLaneId || lanes[idx % lanes.length],
       startedAtMs: Date.now(),
       status: 'queued',
       roundLabel,
@@ -382,7 +432,7 @@ export function ResearchLabApp({
       while (queue.length > 0 && !controller.signal.aborted) {
         const p = queue.shift();
         if (!p) break;
-        const laneId = lanes[workerCursor % lanes.length];
+        const laneId = p.pinnedLaneId || lanes[workerCursor % lanes.length];
         workerCursor++;
         const nodeId = `stage1_${p.id}_${runId}`;
         const jobStartMs = Date.now();
@@ -651,6 +701,12 @@ export function ResearchLabApp({
           perspectives: activeRoom.perspectives,
           sources: activeRoom.sources,
           anonymize: settings.anonymizeJudge,
+          judgeModel: settings.judgeModel,
+          judgeProviderId: settings.judgeProviderId,
+          judgeLaneId:
+            (settings.judgeProviderId || 'bridge-local') === 'bridge-local' && settings.judgeLaneId
+              ? settings.judgeLaneId
+              : undefined,
         },
         controller.signal
       );
@@ -698,7 +754,7 @@ export function ResearchLabApp({
           })),
           summary_1line: res.summary1Line,
           content: res.report.executiveSummary,
-          transport: { lane_id: 'acc2', started_offset_s: 1.0, elapsed_s: res.elapsedSec },
+          transport: { lane_id: res.laneId || 'bridge', started_offset_s: 1.0, elapsed_s: res.elapsedSec },
         },
       }).catch(() => {});
     } catch (err) {
@@ -795,41 +851,24 @@ export function ResearchLabApp({
     persistRoom(updated);
   };
 
-  const handleResetSeedRooms = async () => {
-    setIsResetting(true);
-    try {
-      const res = await resetSeedRoomsApi();
-      setRooms(res.rooms);
-      if (res.rooms[0]) setActiveRoomId(res.rooms[0].id);
-      setSettingsOpen(false);
-    } catch (err) {
-      setErrorBanner(err instanceof Error ? err.message : 'Không khôi phục được dữ liệu mẫu.');
-    } finally {
-      setIsResetting(false);
-    }
-  };
-
   // Auto-hiding Bridge / Guest Mode / Over-concurrency alert strip (HIDDEN during normal operation!)
   const alertMessage = (() => {
-    if (settings.simulateBridgeAlert === 'offline' || health?.bridgeOffline) {
+    if (health?.bridgeOffline) {
       return {
         tone: 'danger' as const,
-        text:
-          health?.mode === 'bridge'
-            ? 'Mất kết nối dsh-gemini-bridge (:10000). Kiểm tra máy chủ Bridge hoặc mở Cài đặt.'
-            : 'Chế độ mô phỏng: Bridge đang tắt — dải cảnh báo tự hiện khi kết nối gặp sự cố và ẩn hoàn toàn lúc bình thường.',
+        text: 'Mất kết nối dsh-gemini-bridge (:10000). Kiểm tra máy chủ Bridge hoặc mở Cài đặt.',
       };
     }
-    if (settings.simulateBridgeAlert === 'guest' || health?.guestMode) {
+    if (health?.guestMode) {
       return {
         tone: 'warn' as const,
-        text: 'Phát hiện phiên Guest Mode trên worker Google — phiên có thể bị giới hạn ngữ cảnh. Vui lòng kiểm tra tài khoản trong Cài đặt.',
+        text: 'Một số luồng đang chạy ở chế độ Khách (Guest Mode) — bạn có thể nạp cookie hoặc thêm API Key trong Cài đặt.',
       };
     }
     if (health && health.healthyWorkers > 0 && settings.maxConcurrency > health.healthyWorkers) {
       return {
         tone: 'warn' as const,
-        text: `Đang đặt ${settings.maxConcurrency} luồng song song vượt quá ${health.healthyWorkers} worker khỏe — có thể chờ khóa tuần tự (429 bridge_busy).`,
+        text: `Đang đặt ${settings.maxConcurrency} luồng song song vượt quá ${health.healthyWorkers} worker khỏe — có thể chờ khóa tuần tự.`,
       };
     }
     return null;
@@ -1032,23 +1071,126 @@ export function ResearchLabApp({
           rooms={rooms}
           activeRoom={activeRoom}
           presets={presets}
+          models={models}
+          laneDetails={health?.laneDetails}
           onSelectRoom={handleSelectRoom}
           onCreateRoomFromPreset={handleCreateRoomFromPreset}
+          onRenameRoom={handleRenameRoom}
           onDeleteRoom={handleDeleteRoom}
           onTogglePerspective={handleTogglePerspective}
           onToggleTagGroup={handleToggleTagGroup}
           onAddPerspective={handleAddPerspective}
+          onUpdatePerspective={handleUpdatePerspective}
+          onRemovePerspective={handleRemovePerspective}
           onSavePreset={handleSavePreset}
+          onOpenSettings={() => setSettingsOpen(true)}
           defaultTab={leftDefaultTab}
         />
 
         <main className="flex-1 min-w-0 flex flex-col bg-[var(--bg)] overflow-hidden">
           {viewTab === 'chat' && (
             <>
+              {/* Clear Role Assignment & Judge Model Strip */}
+              <div className="shrink-0 px-4 py-2 border-b border-[var(--border)] bg-[var(--surface)]/75 flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+                  <span className="text-[11px] font-medium text-[var(--ink-muted)] mr-0.5">
+                    Phân công AI:
+                  </span>
+                  {activeRoom.perspectives
+                    .filter((p) => p.enabled)
+                    .map((p) => {
+                      const color = getPerspectiveColorVar(p.colorIndex);
+                      const accLabel = p.pinnedLaneId
+                        ? formatLaneDisplay(p.pinnedLaneId, health?.laneDetails)
+                        : '';
+                      return (
+                        <button
+                          key={p.id}
+                          type="button"
+                          onClick={() => {
+                            setLeftDefaultTab('roster');
+                            setLeftOpen(true);
+                          }}
+                          title={`Vai trò: ${p.name}${accLabel ? ` · Tài khoản: ${accLabel}` : ' · Tài khoản: Tự động'} — Bấm để sửa tên, vai trò, model hoặc chọn acc`}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-[var(--border)] bg-[var(--bg)] hover:border-[var(--accent)] transition-colors cursor-pointer max-w-[330px]"
+                        >
+                          <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: color }} />
+                          <span className="font-semibold shrink-0" style={{ color }}>
+                            @{p.handle}
+                          </span>
+                          <span className="text-[var(--ink-secondary)] truncate">{p.name}</span>
+                          <span className="text-[10.5px] font-mono-num px-1.5 py-0.5 rounded bg-[var(--bg-subtle)] text-[var(--ink-muted)] shrink-0">
+                            {p.modelLabel.replace(/^gemini-/, '')}
+                          </span>
+                          {accLabel && (
+                            <span className="text-[10.5px] font-mono-num px-1.5 py-0.5 rounded bg-[var(--accent-soft)] text-[var(--accent)] font-semibold shrink-0">
+                              {accLabel}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  <button
+                    type="button"
+                    onClick={() => setSettingsOpen(true)}
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-full border border-dashed border-[var(--border-strong)] text-[11px] font-medium text-[var(--ink-secondary)] hover:text-[var(--accent)] hover:border-[var(--accent)] cursor-pointer"
+                  >
+                    <Plus className="w-3 h-3" />
+                    Thêm AI / Gán acc
+                  </button>
+                </div>
+
+                {/* Judge Model + Account quick picker */}
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <Scale className="w-3.5 h-3.5 text-[var(--accent)]" />
+                  <span className="text-[11px] text-[var(--ink-muted)]">Trọng tài:</span>
+                  <select
+                    aria-label="Chọn model cho Trọng tài"
+                    value={`${settings.judgeProviderId || 'bridge-local'}::${settings.judgeModel || 'gemini-neon'}`}
+                    onChange={(e) => {
+                      const [pid, mid] = e.target.value.split('::');
+                      updateSettings({ judgeProviderId: pid, judgeModel: mid });
+                    }}
+                    className="px-2 py-1 rounded-lg bg-[var(--bg)] border border-[var(--border)] text-[11.5px] text-[var(--ink)] focus:outline-none focus:border-[var(--accent)] cursor-pointer max-w-[180px]"
+                  >
+                    {(models.length > 0
+                      ? models
+                      : [
+                          { id: 'gemini-neon', label: '4 Neon — Phân tích sâu hơn', providerId: 'bridge-local', providerName: 'Bridge' },
+                          { id: 'gemini-carbon', label: '4 Carbon — Lập trình & Phức tạp', providerId: 'bridge-local', providerName: 'Bridge' },
+                          { id: 'gemini-4-hydrogen', label: '4 Hydrogen — Trợ giúp hằng ngày', providerId: 'bridge-local', providerName: 'Bridge' },
+                        ]
+                    ).map((m) => (
+                      <option key={`${m.providerId}::${m.id}`} value={`${m.providerId}::${m.id}`}>
+                        {m.label}
+                      </option>
+                    ))}
+                  </select>
+                  {(settings.judgeProviderId || 'bridge-local') === 'bridge-local' &&
+                    (health?.laneDetails?.length || 0) > 0 && (
+                      <select
+                        aria-label="Chọn tài khoản cho Trọng tài"
+                        value={settings.judgeLaneId || ''}
+                        onChange={(e) => updateSettings({ judgeLaneId: e.target.value })}
+                        className="px-2 py-1 rounded-lg bg-[var(--bg)] border border-[var(--border)] text-[11.5px] font-mono-num text-[var(--ink)] focus:outline-none focus:border-[var(--accent)] cursor-pointer max-w-[140px]"
+                      >
+                        <option value="">Acc: Tự động</option>
+                        {health?.laneDetails?.map((l) => (
+                          <option key={l.id} value={l.id}>
+                            {l.id} ({l.name})
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                </div>
+              </div>
+
               <GroupFeed
                 room={activeRoom}
+                laneDetails={health?.laneDetails}
                 activeJobs={activeJobs}
                 nowMs={nowMs}
+                onRenameRoom={(title) => handleRenameRoom(activeRoom.id, title)}
                 onStopRunning={handleStopRunning}
                 onCitationClick={handleCitationClick}
                 onTogglePerspective={handleTogglePerspective}
@@ -1130,15 +1272,18 @@ export function ResearchLabApp({
         />
       </div>
 
-      {/* Consolidated Technical Settings Drawer */}
+      {/* Consolidated AI Providers, Model & Technical Settings Drawer */}
       <SettingsDrawer
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
+        activeRoomTitle={activeRoom.title}
         settings={settings}
         onUpdateSettings={updateSettings}
         health={health}
-        onResetSeedRooms={handleResetSeedRooms}
-        isResetting={isResetting}
+        models={models}
+        providers={providers}
+        onRefreshProvidersAndModels={refreshProvidersAndModels}
+        onAddPerspectiveToRoom={handleAddPerspective}
       />
     </div>
   );

@@ -13,8 +13,6 @@ import {
   Shield,
   SkipBack,
   SkipForward,
-  SlidersHorizontal,
-  Sparkles,
   Sun,
   X,
 } from 'lucide-react';
@@ -27,7 +25,6 @@ import {
   GraphNode,
 } from './FlowCanvasSvg.tsx';
 import { SwimlaneView } from './SwimlaneView.tsx';
-import { buildSimulatedFlow, FlowPattern } from './flowSimulator.ts';
 
 interface FlowMapAppProps {
   theme: ThemeMode;
@@ -48,12 +45,11 @@ export function FlowMapApp({
   initialRoomId,
 }: FlowMapAppProps) {
   const [rooms, setRooms] = useState<Room[]>([]);
-  const [selectedRoomId, setSelectedRoomId] = useState<string>(initialRoomId || 'room-ai-exam');
+  const [selectedRoomId, setSelectedRoomId] = useState<string>(initialRoomId || '');
   const [viewTab, setViewTab] = useState<FlowViewTab>('map');
 
-  // Event source state: either real SSE events from backend events.jsonl or interactive sandbox simulation
+  // Real SSE events from backend events.jsonl
   const [liveEvents, setLiveEvents] = useState<FlowEvent[]>([]);
-  const [simEvents, setSimEvents] = useState<FlowEvent[] | null>(null);
   const [sseConnected, setSseConnected] = useState(false);
 
   // Replay controls
@@ -70,15 +66,7 @@ export function FlowMapApp({
   const [inspector, setInspector] = useState<InspectorSelection>(null);
   const [showRawDetails, setShowRawDetails] = useState(false);
 
-  // Interactive Sandbox bar (2 -> 10 AI slider + 4 patterns + instant demo)
-  const [sandboxOpen, setSandboxOpen] = useState(false);
-  const [simCount, setSimCount] = useState(6);
-  const [simDisabled, setSimDisabled] = useState<number[]>([5]);
-  const [simPattern, setSimPattern] = useState<FlowPattern>('council');
-  const [simAnon, setSimAnon] = useState(true);
-
-  const sourceEvents = simEvents ?? liveEvents;
-  const maxStep = Math.max(0, sourceEvents.length);
+  const maxStep = Math.max(0, liveEvents.length);
 
   // Load room list for selector
   useEffect(() => {
@@ -87,10 +75,13 @@ export function FlowMapApp({
         setRooms(res.rooms);
         if (initialRoomId && res.rooms.some((r) => r.id === initialRoomId)) {
           setSelectedRoomId(initialRoomId);
-        } else if (res.rooms.some((r) => r.id === 'room-ai-exam')) {
-          setSelectedRoomId('room-ai-exam');
-        } else if (res.rooms[0]) {
-          setSelectedRoomId(res.rooms[0].id);
+        } else {
+          const withMsgs = res.rooms.find((r) => r.messages.length > 0);
+          if (withMsgs) {
+            setSelectedRoomId(withMsgs.id);
+          } else if (res.rooms[0]) {
+            setSelectedRoomId(res.rooms[0].id);
+          }
         }
       })
       .catch(() => {});
@@ -99,7 +90,6 @@ export function FlowMapApp({
   // Real SSE connection to /api/rooms/:id/events (Zero coupling with Interface 1!)
   useEffect(() => {
     if (!selectedRoomId) return;
-    setSimEvents(null);
     setInspector(null);
     setIsLiveMode(true);
     setIsPlaying(false);
@@ -140,9 +130,9 @@ export function FlowMapApp({
   // Keep replayIndex pinned to latest when in LIVE mode
   useEffect(() => {
     if (isLiveMode && !isPlaying) {
-      setReplayIndex(sourceEvents.length);
+      setReplayIndex(liveEvents.length);
     }
-  }, [isLiveMode, isPlaying, sourceEvents.length]);
+  }, [isLiveMode, isPlaying, liveEvents.length]);
 
   // Replay timer loop
   useEffect(() => {
@@ -150,19 +140,19 @@ export function FlowMapApp({
     const intervalMs = Math.max(220, Math.round(950 / speed));
     const timer = setInterval(() => {
       setReplayIndex((prev) => {
-        if (prev >= sourceEvents.length) {
+        if (prev >= liveEvents.length) {
           setIsPlaying(false);
-          return sourceEvents.length;
+          return liveEvents.length;
         }
         return prev + 1;
       });
     }, intervalMs);
     return () => clearInterval(timer);
-  }, [isPlaying, speed, sourceEvents.length]);
+  }, [isPlaying, speed, liveEvents.length]);
 
   const activeSlice = useMemo(
-    () => sourceEvents.slice(0, Math.max(1, replayIndex)),
-    [sourceEvents, replayIndex]
+    () => (liveEvents.length === 0 ? [] : liveEvents.slice(0, Math.max(1, replayIndex))),
+    [liveEvents, replayIndex]
   );
 
   const graph = useMemo(() => buildGraphFromEvents(activeSlice), [activeSlice]);
@@ -179,33 +169,17 @@ export function FlowMapApp({
     const name = last.payload.actor.handle
       ? `@${last.payload.actor.handle}`
       : last.payload.actor.name;
-    return `Sự kiện ${activeSlice.length}/${sourceEvents.length}: ${last.payload.stage_label} · ${name}`;
-  }, [activeSlice, sourceEvents.length]);
-
-  const handleRunSandbox = () => {
-    const generated = buildSimulatedFlow({
-      roomId: selectedRoomId,
-      totalCount: simCount,
-      disabledIndices: simDisabled,
-      pattern: simPattern,
-      maxConcurrency: 3,
-      anonymize: simAnon,
-    });
-    setSimEvents(generated);
-    setInspector(null);
-    setIsLiveMode(false);
-    setReplayIndex(1);
-    setIsPlaying(true);
-  };
+    return `Sự kiện ${activeSlice.length}/${liveEvents.length}: ${last.payload.stage_label} · ${name}`;
+  }, [activeSlice, liveEvents.length]);
 
   const handleTogglePlay = () => {
-    if (sourceEvents.length === 0) return;
+    if (liveEvents.length === 0) return;
     if (isPlaying) {
       setIsPlaying(false);
       return;
     }
     setIsLiveMode(false);
-    if (replayIndex >= sourceEvents.length) {
+    if (replayIndex >= liveEvents.length) {
       setReplayIndex(1);
     }
     setIsPlaying(true);
@@ -236,20 +210,6 @@ export function FlowMapApp({
               </option>
             ))}
           </select>
-
-          {simEvents && (
-            <button
-              type="button"
-              onClick={() => {
-                setSimEvents(null);
-                setIsLiveMode(true);
-                setIsPlaying(false);
-              }}
-              className="hidden lg:inline-flex items-center gap-1 text-[11.5px] font-medium text-[var(--warn)] hover:underline whitespace-nowrap cursor-pointer"
-            >
-              Đang xem Mô phỏng · Quay về phòng thật
-            </button>
-          )}
         </div>
 
         {/* Zone 2: Bản đồ Luồng | Làn thời gian */}
@@ -281,21 +241,8 @@ export function FlowMapApp({
           })}
         </nav>
 
-        {/* Zone 3: Sandbox toggle + Theme switch + Back to Research Lab */}
+        {/* Zone 3: Theme switch + Back to Research Lab */}
         <div className="flex items-center gap-2 shrink-0">
-          <button
-            type="button"
-            onClick={() => setSandboxOpen((v) => !v)}
-            className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
-              sandboxOpen
-                ? 'bg-[var(--accent)] text-[var(--accent-ink)] border-[var(--accent)]'
-                : 'bg-[var(--bg)] text-[var(--ink-secondary)] border-[var(--border)] hover:text-[var(--ink)] hover:border-[var(--accent)]'
-            }`}
-          >
-            <SlidersHorizontal className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Thử nhanh 2–10 AI</span>
-          </button>
-
           <button
             type="button"
             onClick={onToggleTheme}
@@ -325,76 +272,6 @@ export function FlowMapApp({
           </button>
         </div>
       </header>
-
-      {/* Collapsible Interactive Sandbox Bar (2 -> 10 AI + 4 patterns) */}
-      {sandboxOpen && (
-        <div className="shrink-0 px-5 py-3 border-b border-[var(--border)] bg-[var(--bg-subtle)] flex flex-wrap items-center justify-between gap-4 text-xs">
-          <div className="flex flex-wrap items-center gap-4">
-            <div className="flex items-center gap-2">
-              <span className="font-medium text-[var(--ink-secondary)]">Quy mô AI:</span>
-              <input
-                type="range"
-                min={2}
-                max={10}
-                value={simCount}
-                onChange={(e) => {
-                  const val = Number(e.target.value);
-                  setSimCount(val);
-                  setSimDisabled(val >= 5 ? [val - 1, val - 2] : val >= 3 ? [val - 1] : []);
-                }}
-                className="w-24 accent-[var(--accent)] cursor-pointer"
-              />
-              <span className="font-mono-num font-semibold text-[var(--accent)]">
-                {simCount} AI ({simCount - simDisabled.filter((i) => i < simCount).length} bật)
-              </span>
-            </div>
-
-            <div className="flex items-center gap-1.5">
-              <span className="font-medium text-[var(--ink-secondary)]">Mẫu luồng:</span>
-              {(
-                [
-                  { id: 'direct', label: 'A. Hỏi thẳng' },
-                  { id: 'council', label: 'B. Hội đồng → Trọng tài' },
-                  { id: 'debate', label: 'C. Tranh luận N×N' },
-                  { id: 'research', label: 'D. Deep Research' },
-                ] as const
-              ).map((pat) => (
-                <button
-                  key={pat.id}
-                  type="button"
-                  onClick={() => setSimPattern(pat.id)}
-                  className={`px-2.5 py-1 rounded-md border font-medium transition-colors whitespace-nowrap cursor-pointer ${
-                    simPattern === pat.id
-                      ? 'bg-[var(--accent)] text-[var(--accent-ink)] border-[var(--accent)]'
-                      : 'bg-[var(--surface)] text-[var(--ink-secondary)] border-[var(--border)] hover:text-[var(--ink)]'
-                  }`}
-                >
-                  {pat.label}
-                </button>
-              ))}
-            </div>
-
-            <label className="inline-flex items-center gap-1.5 text-[var(--ink-secondary)] cursor-pointer">
-              <input
-                type="checkbox"
-                checked={simAnon}
-                onChange={(e) => setSimAnon(e.target.checked)}
-                className="accent-[var(--accent)]"
-              />
-              Ẩn danh Trọng tài
-            </label>
-          </div>
-
-          <button
-            type="button"
-            onClick={handleRunSandbox}
-            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-[var(--accent)] text-[var(--accent-ink)] font-semibold hover:bg-[var(--accent-hover)] whitespace-nowrap cursor-pointer"
-          >
-            <Sparkles className="w-3.5 h-3.5" />
-            Chạy thử luồng mẫu
-          </button>
-        </div>
-      )}
 
       {/* Stage + Right Slide-In Inspector (Zero Overlap!) */}
       <div className="flex-1 min-h-0 flex relative overflow-hidden">
@@ -450,7 +327,7 @@ export function FlowMapApp({
               setInspector({ type: 'edge', edge, fromNode, toNode });
               setShowRawDetails(false);
             }}
-            isLivePlaying={isPlaying || isLiveMode}
+            isLivePlaying={isPlaying}
           />
         ) : (
           <SwimlaneView
@@ -725,16 +602,14 @@ export function FlowMapApp({
               onClick={() => {
                 setIsPlaying(false);
                 setIsLiveMode(true);
-                setReplayIndex(sourceEvents.length);
+                setReplayIndex(liveEvents.length);
               }}
               className={`inline-flex items-center gap-1 font-mono-num text-[11px] font-semibold shrink-0 ml-2 cursor-pointer ${
-                isLiveMode && !simEvents ? 'text-[var(--ok)]' : 'text-[var(--ink-muted)] hover:text-[var(--accent)]'
+                isLiveMode ? 'text-[var(--ok)]' : 'text-[var(--ink-muted)] hover:text-[var(--accent)]'
               }`}
             >
               <Radio className="w-3 h-3" />
-              {simEvents
-                ? 'Chế độ Mô phỏng'
-                : isLiveMode
+              {isLiveMode
                 ? sseConnected
                   ? 'Đang theo dõi LIVE'
                   : 'LIVE'

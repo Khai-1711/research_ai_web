@@ -1,7 +1,9 @@
 import type {
+  AIProviderConfig,
   BridgeHealth,
   FlowEvent,
   LivingOutline,
+  ModelOption,
   Perspective,
   ReportData,
   Room,
@@ -20,6 +22,67 @@ async function parseJson<T>(res: Response): Promise<T> {
 export async function fetchHealth(): Promise<BridgeHealth> {
   const res = await fetch('/api/health');
   return parseJson<BridgeHealth>(res);
+}
+
+export async function fetchModels(): Promise<{ models: ModelOption[] }> {
+  const res = await fetch('/api/models');
+  return parseJson<{ models: ModelOption[] }>(res);
+}
+
+export async function fetchProviders(): Promise<{ providers: AIProviderConfig[] }> {
+  const res = await fetch('/api/providers');
+  return parseJson<{ providers: AIProviderConfig[] }>(res);
+}
+
+export async function createProviderApi(payload: {
+  name: string;
+  kind: 'bridge' | 'gemini_api' | 'openai_compat';
+  baseUrl?: string;
+  apiKey?: string;
+  defaultModel?: string;
+}): Promise<{ provider: AIProviderConfig }> {
+  const res = await fetch('/api/providers', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return parseJson<{ provider: AIProviderConfig }>(res);
+}
+
+export async function deleteProviderApi(providerId: string): Promise<void> {
+  const res = await fetch(`/api/providers/${encodeURIComponent(providerId)}`, { method: 'DELETE' });
+  await parseJson(res);
+}
+
+export async function renameLaneApi(
+  laneId: string,
+  name: string
+): Promise<{ id: string; name: string; laneNames: Record<string, string> }> {
+  const res = await fetch(`/api/lanes/${encodeURIComponent(laneId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  return parseJson(res);
+}
+
+export async function testProviderApi(
+  providerId: string,
+  laneId?: string
+): Promise<{
+  ok: boolean;
+  modelUsed?: string;
+  laneId?: string;
+  elapsedSec?: number;
+  preview?: string;
+  error?: string;
+}> {
+  const res = await fetch(`/api/providers/${encodeURIComponent(providerId)}/test`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(laneId ? { laneId } : {}),
+  });
+  return parseJson(res);
 }
 
 export async function fetchRooms(): Promise<{ rooms: Room[] }> {
@@ -53,11 +116,6 @@ export async function patchRoomApi(roomId: string, patch: Partial<Room>): Promis
 export async function deleteRoomApi(roomId: string): Promise<void> {
   const res = await fetch(`/api/rooms/${encodeURIComponent(roomId)}`, { method: 'DELETE' });
   await parseJson(res);
-}
-
-export async function resetSeedRoomsApi(): Promise<{ rooms: Room[] }> {
-  const res = await fetch('/api/rooms/reset', { method: 'POST' });
-  return parseJson<{ rooms: Room[] }>(res);
 }
 
 export async function emitFlowEventApi(
@@ -120,6 +178,9 @@ export async function runSynthesizeApi(
     perspectives: Perspective[];
     sources: SourceItem[];
     anonymize: boolean;
+    judgeModel?: string;
+    judgeProviderId?: string;
+    judgeLaneId?: string;
   },
   signal?: AbortSignal
 ): Promise<{
@@ -128,6 +189,8 @@ export async function runSynthesizeApi(
   elapsedSec: number;
   summary1Line: string;
   anonymizeUsed: boolean;
+  laneId?: string;
+  modelUsed?: string;
 }> {
   const res = await fetch('/api/ai/synthesize', {
     method: 'POST',
