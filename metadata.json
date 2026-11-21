@@ -1,0 +1,6 @@
+{
+  "name": "Research Lab & Visual AI Flow Map",
+  "description": "Không gian nghiên cứu hội thoại đa góc nhìn AI (1..N AI) thích ứng mật độ kiểu sổ tay nghiên cứu & Bản đồ trực quan hóa luồng dữ liệu AI độc lập.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
