@@ -1,48 +1,62 @@
-"""Toàn bộ REST API, SSE (/flow) và prompt điều phối hội đồng AI / Trọng tài (Judge).
-- Sửa file này khi muốn thay đổi cách ghép ngữ cảnh cho từng góc nhìn AI, prompt chấm điểm Judge, hoặc thêm API mới.
+"""Tầng REST API & SSE (/api/*) mỏng của WebChat Backend.
+- Ủy thác ngữ cảnh/quy tắc cho app.prompts, kiểm chứng cho app.verifier, trọng tài cho app.judge và tìm nguồn cho app.research.
+- Giữ re-export các hàm/hằng số cũ để tương thích ngược với bộ kiểm thử.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
-import re
 import time
 from typing import Any
+from urllib.parse import unquote
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
-from app.bridge import BridgeCallError, BridgeClient, parse_resilient_json
+from app.bridge import BridgeCallError, BridgeClient
+from app.judge import (
+    MAX_JUDGE_SOURCE_EXCERPT,
+    build_judge_prompt,
+    mask_handles_in_text,
+    synthesize_judge_report,
+    unmask_handles_in_text,
+)
+from app.prompts import (
+    MAX_DEEP_HISTORY_CHARS,
+    MAX_HISTORY_CHARS,
+    MAX_PERSPECTIVE_SOURCE_CHARS,
+    MAX_PRESERVED_RESEARCH_CHARS,
+    build_perspective_prompts,
+    extract_summary_1line,
+    format_conversation_history,
+)
 from app.providers import LaneNameStore, ProviderStore
-from app.research import fetch_url_as_source, search_open_academic_sources
+from app.research import (
+    _MAX_FETCH_BYTES,
+    extract_uploaded_pdf_source,
+    fetch_url_as_source,
+    search_open_academic_sources,
+)
 from app.storage import RoomStorage, utc_now_iso
+from app.verifier import extract_cited_sources, verify_perspective_turn
 
-_CITATION_RE = re.compile(r"\[S(\d+)\]")
-
-
-def extract_summary_1line(text: str) -> str:
-    for line in (text or "").splitlines():
-        cleaned = line.strip()
-        if not cleaned:
-            continue
-        cleaned = re.sub(r"^#+\s*", "", cleaned)
-        cleaned = re.sub(r"^\*\*Kết luận:\*\*\s*", "", cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r"^Kết luận:\s*", "", cleaned, flags=re.IGNORECASE)
-        cleaned = cleaned.replace("**", "").strip()
-        if len(cleaned) >= 16:
-            return cleaned[:152].rstrip() + "…" if len(cleaned) > 155 else cleaned
-    fallback = re.sub(r"\s+", " ", (text or "").replace("**", "")).strip()
-    return fallback[:152].rstrip() + "…" if len(fallback) > 155 else fallback
-
-
-def extract_cited_sources(text: str, valid_ids: set[str]) -> list[str]:
-    seen: list[str] = []
-    for m in _CITATION_RE.finditer(text or ""):
-        sid = f"S{m.group(1)}"
-        if sid in valid_ids and sid not in seen:
-            seen.append(sid)
-    return seen
+__all__ = [
+    "MAX_HISTORY_CHARS",
+    "MAX_DEEP_HISTORY_CHARS",
+    "MAX_PRESERVED_RESEARCH_CHARS",
+    "MAX_PERSPECTIVE_SOURCE_CHARS",
+    "MAX_JUDGE_SOURCE_EXCERPT",
+    "extract_summary_1line",
+    "extract_cited_sources",
+    "mask_handles_in_text",
+    "unmask_handles_in_text",
+    "build_judge_prompt",
+    "format_conversation_history",
+    "build_api_router",
+]
 
 
 def build_api_router(
@@ -80,6 +94,59 @@ def build_api_router(
         except ValueError as exc:
             return JSONResponse(status_code=400, content={"error": str(exc)})
         return {"id": lane_id, "name": all_names.get(lane_id, ""), "laneNames": all_names}
+
+    @router.post("/lanes/create")
+    async def create_bridge_lane():
+        try:
+            return await bridge.create_lane()
+        except BridgeCallError as exc:
+            return JSONResponse(status_code=502, content={"error": str(exc)})
+
+    @router.post("/lanes/sync-all")
+    async def sync_all_bridge_lanes():
+        try:
+            return await bridge.sync_all_lane_cookies()
+        except BridgeCallError as exc:
+            return JSONResponse(status_code=502, content={"error": str(exc)})
+
+    @router.post("/lanes/{lane_id}/login")
+    async def login_bridge_lane(lane_id: str, request: Request):
+        label = ""
+        try:
+            body = await request.json()
+            if isinstance(body, dict):
+                label = str(body.get("label") or "").strip()
+        except Exception:
+            pass
+        if not label:
+            label = lane_name_store.load_all().get(lane_id, "") or lane_id
+        try:
+            return await bridge.start_lane_login(lane_id, label=label)
+        except BridgeCallError as exc:
+            return JSONResponse(status_code=502, content={"error": str(exc)})
+
+    @router.post("/lanes/{lane_id}/finish-login")
+    async def finish_login_bridge_lane(lane_id: str):
+        try:
+            return await bridge.finish_lane_login(lane_id)
+        except BridgeCallError as exc:
+            return JSONResponse(status_code=502, content={"error": str(exc)})
+
+    @router.post("/lanes/{lane_id}/sync")
+    async def sync_bridge_lane(lane_id: str, request: Request):
+        label = ""
+        try:
+            body = await request.json()
+            if isinstance(body, dict):
+                label = str(body.get("label") or "").strip()
+        except Exception:
+            pass
+        if not label:
+            label = lane_name_store.load_all().get(lane_id, "") or lane_id
+        try:
+            return await bridge.sync_lane_cookie(lane_id, label=label)
+        except BridgeCallError as exc:
+            return JSONResponse(status_code=502, content={"error": str(exc)})
 
     @router.get("/models")
     async def list_models():
@@ -240,7 +307,7 @@ def build_api_router(
         saved = storage.append_flow_event(room_id, body)
         return JSONResponse(status_code=201, content={"event": saved})
 
-    # 4. Real Open Academic Deep Research
+    # 4. Real Open Academic Deep Research + Local PDF Upload
     @router.post("/research/search")
     async def research_search(request: Request):
         body = await request.json()
@@ -261,7 +328,50 @@ def build_api_router(
         except Exception as exc:
             return JSONResponse(status_code=500, content={"error": str(exc)})
 
-    # 5. Stateless single-perspective AI turn via dsh-gemini-bridge
+    @router.post("/research/upload-pdf")
+    async def research_upload_pdf(request: Request):
+        ctype = (request.headers.get("content-type") or "").lower()
+        filename = unquote(
+            str(
+                request.query_params.get("filename")
+                or request.headers.get("x-file-name")
+                or "tai-lieu.pdf"
+            ).strip()
+        )
+        content_len = request.headers.get("content-length")
+        if content_len and content_len.isdigit() and int(content_len) > (_MAX_FETCH_BYTES + 4 * 1024 * 1024):
+            return JSONResponse(
+                status_code=413,
+                content={"error": "Tệp PDF vượt quá giới hạn dung lượng 15 MB."},
+            )
+
+        try:
+            if "application/json" in ctype:
+                body = await request.json()
+                filename = str(body.get("filename") or filename).strip() or "tai-lieu.pdf"
+                raw_b64 = str(body.get("contentBase64") or "").strip()
+                if not raw_b64:
+                    return JSONResponse(status_code=400, content={"error": "Thiếu nội dung PDF (contentBase64)."})
+                try:
+                    raw_bytes = base64.b64decode(raw_b64, validate=True)
+                except binascii.Error:
+                    return JSONResponse(status_code=400, content={"error": "Dữ liệu base64 không hợp lệ."})
+            else:
+                raw_bytes = await request.body()
+
+            if len(raw_bytes) > _MAX_FETCH_BYTES:
+                return JSONResponse(
+                    status_code=413,
+                    content={"error": "Tệp PDF vượt quá giới hạn dung lượng 15 MB."},
+                )
+            item = extract_uploaded_pdf_source(raw_bytes, filename=filename)
+            return {"item": item}
+        except ValueError as exc:
+            return JSONResponse(status_code=400, content={"error": str(exc)})
+        except Exception as exc:
+            return JSONResponse(status_code=500, content={"error": str(exc)})
+
+    # 5. Stateless single-perspective AI turn via dsh-gemini-bridge + Verifier
     @router.post("/ai/perspective")
     async def run_perspective(request: Request):
         started = time.monotonic()
@@ -270,50 +380,24 @@ def build_api_router(
         prompt = str(body.get("prompt") or "").strip()
         sources = list(body.get("sources") or [])
         round_num = int(body.get("round") or 0)
+        conversation_history = list(body.get("conversationHistory") or [])
         peer_messages = list(body.get("peerMessages") or [])
         requested_lane = str(body.get("laneId") or "").strip()
+        detail_mode = str(body.get("detailMode") or "").strip()
 
         if not perspective or not prompt:
             return JSONResponse(
                 status_code=400, content={"error": "Thiếu góc nhìn hoặc nội dung câu hỏi."}
             )
 
-        if sources:
-            source_context = "\n".join(
-                f"[{s.get('id')}] ({s.get('origin')}) {s.get('title')}: \"{s.get('excerpt', '')}\""
-                for s in sources
-            )
-        else:
-            source_context = (
-                "Chưa có nguồn đính kèm; trả lời dựa trên lập luận chuyên môn và không tự bịa mã [S#]."
-            )
-
-        peer_context = ""
-        if peer_messages:
-            lines = "\n".join(
-                f"- @{m.get('handle')}: {m.get('content')}" for m in peer_messages
-            )
-            peer_context = (
-                "\n\nCÁC LẬP LUẬN TRƯỚC ĐÓ TRONG PHÒNG "
-                "(hãy phản biện trực diện hoặc bổ sung điểm thiếu):\n" + lines
-            )
-
-        system_instruction = "\n".join(
-            [
-                f"Bạn đang đóng vai góc nhìn @{perspective.get('handle')} ({perspective.get('name')}) "
-                "trong một phòng nghiên cứu đa góc nhìn bằng tiếng Việt.",
-                str(perspective.get("rolePrompt") or ""),
-                "QUY TẮC ĐỊNH DẠNG BẮT BUỘC:",
-                '1. Dòng đầu tiên PHẢI bắt đầu bằng "Kết luận: " tóm gọn lập trường cốt lõi trong đúng 1 câu (dưới 28 từ).',
-                "2. Sau đó trình bày 2–4 ý phân tích súc tích, dễ đọc (dùng gạch đầu dòng hoặc đánh số ngắn).",
-                "3. CHỈ gắn mã trích dẫn [S1], [S2]... khớp chính xác với danh sách nguồn được cung cấp bên dưới. Tuyệt đối không bịa mã nguồn không tồn tại.",
-                "4. Giữ độ dài khoảng 130–230 từ để người dùng đọc sâu thoải mái.",
-            ]
-        )
-        user_prompt = (
-            f"VÒNG THẢO LUẬN: Vòng {round_num}\n"
-            f"KHO NGUỒN ĐÍNH KÈM:\n{source_context}{peer_context}\n\n"
-            f"CÂU HỎI CỦA NGƯỜI DÙNG:\n{prompt}"
+        system_instruction, user_prompt, _use_deep = build_perspective_prompts(
+            perspective=perspective,
+            prompt=prompt,
+            sources=sources,
+            round_num=round_num,
+            conversation_history=conversation_history,
+            peer_messages=peer_messages,
+            detail_mode=detail_mode,
         )
 
         pinned_lane_id = (
@@ -332,11 +416,13 @@ def build_api_router(
             return JSONResponse(status_code=502, content={"error": str(exc)})
 
         elapsed_sec = round(time.monotonic() - started, 1)
-        valid_ids = {str(s.get("id")) for s in sources if s.get("id")}
+        valid_ids = {str(s.get("id")) for s in sources if isinstance(s, dict) and s.get("id")}
+        verification = verify_perspective_turn(result.text, sources)
         return {
             "content": result.text,
             "summary1Line": extract_summary_1line(result.text),
             "citedSourceIds": extract_cited_sources(result.text, valid_ids),
+            "verification": verification,
             "elapsedSec": elapsed_sec,
             "modelUsed": result.model_used,
             "fallbackFrom": result.fallback_from,
@@ -344,174 +430,23 @@ def build_api_router(
             "rawPrompt": result.raw_prompt,
         }
 
-    # 6. Judge & Synthesizer (Report + Dynamic Rubric + Living Outline)
+    # 6. Judge & Synthesizer (Report + Dynamic Rubric + Living Outline + Cross-Account Exclusion)
     @router.post("/ai/synthesize")
     async def run_synthesize(request: Request):
         started = time.monotonic()
         body = await request.json()
-        room_title = str(body.get("roomTitle") or "Nghiên cứu").strip()
-        messages = list(body.get("messages") or [])
-        perspectives = list(body.get("perspectives") or [])
-        sources = list(body.get("sources") or [])
-        anonymize = bool(body.get("anonymize", True))
-
-        ai_messages = [m for m in messages if m.get("handle")]
-        if not ai_messages:
-            return JSONResponse(
-                status_code=400,
-                content={"error": "Cần ít nhất 1 phản hồi từ góc nhìn AI để Trọng tài tổng hợp."},
-            )
-
-        active_handles: list[str] = []
-        for m in ai_messages:
-            h = str(m["handle"])
-            if h not in active_handles:
-                active_handles.append(h)
-
-        alias_map: dict[str, str] = {}
-        reverse_alias: dict[str, str] = {}
-        for idx, h in enumerate(active_handles):
-            letter = chr(65 + (idx % 26))
-            alias = f"Ứng viên {letter}" if anonymize else f"@{h}"
-            alias_map[h] = alias
-            reverse_alias[alias] = h
-            reverse_alias[alias.lstrip("@")] = h
-            reverse_alias[h] = h
-
-        transcript = "\n\n---\n\n".join(
-            f"[Vòng {m.get('round', 0)}] {alias_map.get(str(m['handle']), m['handle'])}:\n{m.get('content', '')}"
-            for m in ai_messages
-        )
-        source_list = "\n".join(
-            f"[{s.get('id')}] {s.get('title')} ({s.get('origin')})" for s in sources
-        )
-        labels_str = ", ".join(alias_map[h] for h in active_handles)
-        prompt_text = (
-            f'Đề tài nghiên cứu: "{room_title}"\n\n'
-            f"KHO NGUỒN HỢP LỆ:\n{source_list or '(Chưa có nguồn)'}\n\n"
-            f"TOÀN BỘ LẬP LUẬN:\n{transcript}\n\n"
-            "Hãy đóng vai Trọng tài học thuật công tâm, trả về ĐÚNG 1 khối JSON hợp lệ tiếng Việt "
-            "(không văn bản thừa ngoài JSON) gồm các khóa: "
-            "executiveSummary (1 đoạn súc tích kèm mã [S#] hợp lệ nếu có), "
-            "consensus (mảng {title, supporters, citations}), "
-            "contradictions (mảng {topic, detail, suggestedPrompt}), "
-            "gaps (mảng chuỗi 2 lỗ hổng cần tìm thêm nguồn), "
-            "openDebates (mảng 1-2 câu), "
-            f"scores (mảng {{label, evidence, logic, rebuttal, summary, citations}} thang 0..10 cho từng mã nhãn: {labels_str})."
-        )
-
-        judge_model = str(body.get("judgeModel") or "").strip() or None
-        judge_provider_id = str(body.get("judgeProviderId") or "").strip() or None
-        judge_lane_id = str(body.get("judgeLaneId") or "").strip() or None
         try:
-            result = await prov_store.complete(
-                default_bridge=bridge,
-                provider_id=judge_provider_id,
-                system_instruction="Bạn là Trọng tài học thuật. Chỉ trả về duy nhất 1 JSON object hợp lệ.",
-                user_prompt=prompt_text,
-                model=judge_model,
-                pinned_lane_id=judge_lane_id,
+            status_code, payload = await synthesize_judge_report(
+                body=body,
+                bridge=bridge,
+                prov_store=prov_store,
+                started_monotonic=started,
+                time_fn=time.monotonic,
             )
         except BridgeCallError as exc:
             return JSONResponse(status_code=502, content={"error": str(exc)})
-
-        parsed = parse_resilient_json(result.text)
-        valid_source_ids = {str(s.get("id")) for s in sources if s.get("id")}
-
-        def _clean_cites(raw: Any) -> list[str]:
-            if not isinstance(raw, list):
-                return []
-            out: list[str] = []
-            for item in raw:
-                cid = str(item).strip().strip("[]")
-                if cid in valid_source_ids and cid not in out:
-                    out.append(cid)
-            return out
-
-        def _find_score(handle: str) -> dict[str, Any]:
-            for row in parsed.get("scores") or []:
-                if not isinstance(row, dict):
-                    continue
-                lbl = str(row.get("label") or "")
-                if reverse_alias.get(lbl) == handle or handle in lbl:
-                    return row
-            return {}
-
-        rubric: list[dict[str, Any]] = []
-        breakdown: list[dict[str, Any]] = []
-        for handle in active_handles:
-            p = next((item for item in perspectives if item.get("handle") == handle), {})
-            row = _find_score(handle)
-            ev = round(float(row.get("evidence", 8.0)), 1)
-            lg = round(float(row.get("logic", 8.0)), 1)
-            rb = round(float(row.get("rebuttal", 8.0)), 1)
-            tot = round((ev + lg + rb) / 3.0, 1)
-            rubric.append(
-                {
-                    "perspectiveId": p.get("id", handle),
-                    "handle": handle,
-                    "colorIndex": int(p.get("colorIndex", 0)),
-                    "evidence": ev,
-                    "logic": lg,
-                    "rebuttal": rb,
-                    "total": tot,
-                }
-            )
-            breakdown.append(
-                {
-                    "handle": handle,
-                    "summary": str(row.get("summary") or f"Đóng góp góc nhìn chuyên môn từ @{handle}."),
-                    "citations": _clean_cites(row.get("citations")),
-                }
-            )
-        rubric.sort(key=lambda r: r["total"], reverse=True)
-
-        exec_summary = str(
-            parsed.get("executiveSummary")
-            or "Trọng tài đã tổng hợp các lập luận chính, cân đối bằng chứng và chỉ ra trục tranh luận cần tiếp tục xác minh."
-        )
-        report = {
-            "title": f"Báo cáo tổng hợp: {room_title}",
-            "subtitle": f"Trọng tài {'(Ẩn danh)' if anonymize else '(Công khai)'} · {len(sources)} nguồn xác minh · {len(active_handles)}/{len(perspectives)} góc nhìn tham gia",
-            "executiveSummary": exec_summary,
-            "perspectiveBreakdown": breakdown,
-            "openDebates": [str(x) for x in (parsed.get("openDebates") or [])],
-            "rubric": rubric,
-            "updatedAt": utc_now_iso(),
-        }
-        living_outline = {
-            "consensus": [
-                {
-                    "title": str(c.get("title", "")),
-                    "supporters": [
-                        reverse_alias.get(str(s), str(s).lstrip("@"))
-                        for s in (c.get("supporters") or [])
-                    ],
-                    "citations": _clean_cites(c.get("citations")),
-                }
-                for c in (parsed.get("consensus") or [])
-                if isinstance(c, dict)
-            ],
-            "contradictions": [
-                {
-                    "topic": str(c.get("topic", "")),
-                    "detail": str(c.get("detail", "")),
-                    "suggestedPrompt": str(c.get("suggestedPrompt", "")),
-                }
-                for c in (parsed.get("contradictions") or [])
-                if isinstance(c, dict)
-            ],
-            "gaps": [str(g) for g in (parsed.get("gaps") or [])],
-        }
-
-        return {
-            "report": report,
-            "livingOutline": living_outline,
-            "elapsedSec": round(time.monotonic() - started, 1),
-            "summary1Line": extract_summary_1line(exec_summary),
-            "anonymizeUsed": anonymize,
-            "laneId": result.lane_id,
-            "modelUsed": result.model_used,
-        }
+        if status_code != 200:
+            return JSONResponse(status_code=status_code, content=payload)
+        return payload
 
     return router

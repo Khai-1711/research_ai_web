@@ -2,13 +2,17 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   BookOpen,
   Check,
+  ChevronDown,
+  ChevronUp,
   Copy,
   Download,
   ExternalLink,
   FileJson,
   ListTree,
+  MessageSquarePlus,
   Search,
   Sparkles,
+  Trash2,
   X,
 } from 'lucide-react';
 import type { Room } from '../types.ts';
@@ -23,6 +27,8 @@ interface RightDrawerProps {
   highlightedSourceId: string | null;
   onSelectSuggestedPrompt: (prompt: string) => void;
   onFillGapsResearch: (gaps: string[]) => void;
+  onDeleteSource?: (sourceId: string) => void;
+  onInjectSourcesToChat?: () => void;
   isBusy: boolean;
 }
 
@@ -35,9 +41,12 @@ export function RightDrawer({
   highlightedSourceId,
   onSelectSuggestedPrompt,
   onFillGapsResearch,
+  onDeleteSource,
+  onInjectSourcesToChat,
   isBusy,
 }: RightDrawerProps) {
   const [copiedMd, setCopiedMd] = useState(false);
+  const [expandedSourceIds, setExpandedSourceIds] = useState<Record<string, boolean>>({});
   const sourceRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   useEffect(() => {
@@ -129,42 +138,120 @@ export function RightDrawer({
               </p>
             </div>
           ) : (
-            room.sources.map((src) => {
-              const isHighlighted = highlightedSourceId === src.id;
-              return (
-                <div
-                  key={src.id}
-                  ref={(el) => {
-                    sourceRefs.current[src.id] = el;
-                  }}
-                  className={`p-3.5 rounded-xl border transition-all duration-200 ${
-                    isHighlighted
-                      ? 'bg-[var(--accent-soft)] border-[var(--accent)] shadow-[var(--shadow-card)]'
-                      : 'bg-[var(--surface)] border-[var(--border)]'
-                  }`}
+            <>
+              {onInjectSourcesToChat && (
+                <button
+                  type="button"
+                  disabled={isBusy}
+                  onClick={onInjectSourcesToChat}
+                  className="w-full py-2 px-3 rounded-lg bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent)] hover:text-[var(--accent-ink)] text-xs font-medium flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer"
                 >
-                  <div className="flex items-center justify-between gap-2 text-[11.5px] text-[var(--ink-muted)] font-mono-num">
-                    <span className="font-semibold text-[var(--accent)]">[{src.id}]</span>
-                    <span className="truncate">{src.origin}</span>
-                  </div>
-                  <h4 className="mt-1 text-[13.5px] font-semibold text-[var(--ink)] leading-snug">
-                    {src.title}
-                  </h4>
-                  <p className="mt-1.5 text-[12.5px] text-[var(--ink-secondary)] leading-relaxed italic">
-                    “{src.excerpt}”
-                  </p>
-                  <a
-                    href={src.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="mt-2 inline-flex items-center gap-1 text-[11.5px] font-medium text-[var(--accent)] hover:underline truncate max-w-full"
+                  <MessageSquarePlus className="w-3.5 h-3.5" />
+                  In toàn bộ Kho nguồn vào Chat ({room.sources.length})
+                </button>
+              )}
+              {room.sources.map((src) => {
+                const isHighlighted = highlightedSourceId === src.id;
+                const isLong = src.excerpt.length > 360;
+                const isExpanded = Boolean(expandedSourceIds[src.id]);
+                const shownExcerpt =
+                  isLong && !isExpanded ? `${src.excerpt.slice(0, 340).trimEnd()}…` : src.excerpt;
+                return (
+                  <div
+                    key={src.id}
+                    ref={(el) => {
+                      sourceRefs.current[src.id] = el;
+                    }}
+                    className={`p-3.5 rounded-xl border transition-all duration-200 ${
+                      isHighlighted
+                        ? 'bg-[var(--accent-soft)] border-[var(--accent)] shadow-[var(--shadow-card)]'
+                        : 'bg-[var(--surface)] border-[var(--border)]'
+                    }`}
                   >
-                    <ExternalLink className="w-3 h-3 shrink-0" />
-                    <span className="truncate">{src.url.replace(/^https?:\/\//, '')}</span>
-                  </a>
-                </div>
-              );
-            })
+                    <div className="flex items-center justify-between gap-2 text-[11.5px] text-[var(--ink-muted)] font-mono-num">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="font-semibold text-[var(--accent)]">[{src.id}]</span>
+                        <span
+                          title={
+                            src.contentLevel === 'full_text'
+                              ? 'Nguồn đã trích xuất toàn văn / bài dài để AI đối chiếu sâu'
+                              : src.contentLevel === 'abstract_only'
+                              ? 'Nguồn hiện chỉ mới có phần tóm tắt (Abstract)'
+                              : 'Nguồn trích đoạn / tổng quan'
+                          }
+                          className={`px-1.5 py-0.2 rounded text-[10px] font-sans font-medium shrink-0 ${
+                            src.contentLevel === 'full_text'
+                              ? 'bg-[var(--ok)]/15 text-[var(--ok)]'
+                              : src.contentLevel === 'abstract_only'
+                              ? 'bg-[var(--warn-soft)] text-[var(--warn)]'
+                              : 'bg-[var(--bg-subtle)] text-[var(--ink-secondary)]'
+                          }`}
+                        >
+                          {src.contentLevel === 'full_text'
+                            ? 'Toàn văn'
+                            : src.contentLevel === 'abstract_only'
+                            ? 'Chỉ Tóm tắt'
+                            : 'Trích đoạn'}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="truncate">{src.origin}</span>
+                        {onDeleteSource && (
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => onDeleteSource(src.id)}
+                            title={`Xóa nguồn [${src.id}]`}
+                            className="p-0.5 rounded text-[var(--ink-muted)] hover:text-[var(--danger)] transition-colors disabled:opacity-40 cursor-pointer shrink-0"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <h4 className="mt-1 text-[13.5px] font-semibold text-[var(--ink)] leading-snug">
+                      {src.title}
+                    </h4>
+                    <p className="mt-1.5 text-[12.5px] text-[var(--ink-secondary)] leading-relaxed italic whitespace-pre-line">
+                      “{shownExcerpt}”
+                    </p>
+                    {isLong && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExpandedSourceIds((prev) => ({
+                            ...prev,
+                            [src.id]: !prev[src.id],
+                          }))
+                        }
+                        className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-[var(--accent)] hover:underline cursor-pointer"
+                      >
+                        {isExpanded ? (
+                          <>
+                            <ChevronUp className="w-3 h-3" />
+                            Thu gọn trích đoạn
+                          </>
+                        ) : (
+                          <>
+                            <ChevronDown className="w-3 h-3" />
+                            Xem toàn văn ({src.excerpt.length} ký tự)
+                          </>
+                        )}
+                      </button>
+                    )}
+                    <a
+                      href={src.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-2 inline-flex items-center gap-1 text-[11.5px] font-medium text-[var(--accent)] hover:underline truncate max-w-full"
+                    >
+                      <ExternalLink className="w-3 h-3 shrink-0" />
+                      <span className="truncate">{src.url.replace(/^https?:\/\//, '')}</span>
+                    </a>
+                  </div>
+                );
+              })}
+            </>
           )
         ) : (
           /* Living Outline Tab */

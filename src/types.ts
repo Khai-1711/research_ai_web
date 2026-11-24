@@ -23,8 +23,21 @@ export interface SourceItem {
   title: string;
   excerpt: string;
   url: string;
+  contentLevel?: 'full_text' | 'abstract_only' | 'excerpt';
+  charCount?: number;
   verified: boolean;
   addedAt: string;
+}
+
+export interface TurnVerification {
+  validCitations: string[];
+  inferredCitations: string[];
+  invalidCitations: string[];
+  numericClaimsChecked: number;
+  numericClaimsMatched: number;
+  unverifiedNumbers: Array<{ number: string; cited: string[]; sentence: string }>;
+  abstractOnlyCited: string[];
+  warnings: string[];
 }
 
 export interface ChatMessage {
@@ -41,9 +54,20 @@ export interface ChatMessage {
   summary1Line?: string;
   content: string;
   citedSourceIds: string[];
+  verification?: TurnVerification;
   pinnedToReport?: boolean;
+  preserveFull?: boolean;
   fallbackFrom?: string;
   createdAt: string;
+}
+
+export interface ConversationHistoryItem {
+  round: number;
+  senderType: 'user' | 'ai' | 'judge' | 'system';
+  handle?: string;
+  content: string;
+  summary1Line?: string;
+  preserveFull?: boolean;
 }
 
 export interface LivingOutline {
@@ -68,6 +92,16 @@ export interface RubricRow {
   logic: number;
   rebuttal: number;
   total: number;
+  fallbackScored?: boolean;
+}
+
+export interface VerificationSummary {
+  totalValidCitations: number;
+  totalInferredCitations: number;
+  totalInvalidCitations: number;
+  totalNumericChecked: number;
+  totalNumericMatched: number;
+  warnings: string[];
 }
 
 export interface ReportData {
@@ -81,6 +115,8 @@ export interface ReportData {
   }>;
   openDebates: string[];
   rubric: RubricRow[];
+  evaluationWarnings?: string[];
+  verificationSummary?: VerificationSummary;
   updatedAt: string;
 }
 
@@ -196,6 +232,15 @@ export interface LaneInfo {
   authOk: boolean;
   model: string;
   accountStatus: string;
+  accountKey?: string;
+  duplicatedWith?: string[];
+  profileId?: string;
+  hasProfileData?: boolean;
+  loginOpen?: boolean;
+  syncing?: boolean;
+  lastSyncStatus?: string;
+  lastSyncError?: string | null;
+  lastSyncAt?: number;
 }
 
 export interface BridgeHealth {
@@ -208,6 +253,7 @@ export interface BridgeHealth {
   guestMode: boolean;
   bridgeOffline: boolean;
   defaultModel: string;
+  cookieSyncBrowser?: string | null;
 }
 
 export interface ModelOption {
@@ -232,6 +278,7 @@ export interface AppSettings {
   maxConcurrency: number;
   approveResearchPlan: boolean;
   anonymizeJudge: boolean;
+  detailMode?: 'deep' | 'standard';
   judgeModel?: string;
   judgeProviderId?: string;
   judgeLaneId?: string;

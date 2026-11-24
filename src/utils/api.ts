@@ -1,6 +1,7 @@
 import type {
   AIProviderConfig,
   BridgeHealth,
+  ConversationHistoryItem,
   FlowEvent,
   LivingOutline,
   ModelOption,
@@ -8,6 +9,7 @@ import type {
   ReportData,
   Room,
   SourceItem,
+  TurnVerification,
 } from '../types.ts';
 
 async function parseJson<T>(res: Response): Promise<T> {
@@ -62,6 +64,80 @@ export async function renameLaneApi(
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name }),
+  });
+  return parseJson(res);
+}
+
+export async function createLaneApi(): Promise<{
+  ok: boolean;
+  lane_id: string;
+  port: number;
+  url: string;
+  spawned: boolean;
+  ready: boolean;
+}> {
+  const res = await fetch('/api/lanes/create', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  return parseJson(res);
+}
+
+export async function loginLaneApi(
+  laneId: string,
+  label?: string
+): Promise<{ ok: boolean; status: string; message?: string }> {
+  const res = await fetch(`/api/lanes/${encodeURIComponent(laneId)}/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(label ? { label } : {}),
+  });
+  return parseJson(res);
+}
+
+export async function finishLoginLaneApi(laneId: string): Promise<{
+  ok: boolean;
+  profile_id: string;
+  account_key?: string;
+  rotated?: boolean;
+  delivery?: { applied?: boolean; delivery?: string; auth_ok?: boolean };
+}> {
+  const res = await fetch(`/api/lanes/${encodeURIComponent(laneId)}/finish-login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  return parseJson(res);
+}
+
+export async function syncLaneApi(
+  laneId: string,
+  label?: string
+): Promise<{
+  ok: boolean;
+  profile_id: string;
+  account_key?: string;
+  rotated?: boolean;
+  delivery?: { applied?: boolean; delivery?: string; auth_ok?: boolean };
+}> {
+  const res = await fetch(`/api/lanes/${encodeURIComponent(laneId)}/sync`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(label ? { label } : {}),
+  });
+  return parseJson(res);
+}
+
+export async function syncAllLanesApi(): Promise<{
+  ok: boolean;
+  total: number;
+  synced: number;
+}> {
+  const res = await fetch('/api/lanes/sync-all', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
   });
   return parseJson(res);
 }
@@ -142,20 +218,33 @@ export async function searchResearchApi(payload: {
   return parseJson<{ items: Omit<SourceItem, 'id'>[] }>(res);
 }
 
+export async function uploadPdfSourceApi(file: File): Promise<{ item: Omit<SourceItem, 'id'> }> {
+  const buf = await file.arrayBuffer();
+  const res = await fetch(`/api/research/upload-pdf?filename=${encodeURIComponent(file.name)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/pdf' },
+    body: buf,
+  });
+  return parseJson<{ item: Omit<SourceItem, 'id'> }>(res);
+}
+
 export async function runPerspectiveApi(
   payload: {
     perspective: Perspective;
     prompt: string;
     sources: SourceItem[];
     round: number;
+    conversationHistory?: ConversationHistoryItem[];
     peerMessages?: Array<{ handle: string; content: string }>;
     laneId?: string;
+    detailMode?: 'deep' | 'standard';
   },
   signal?: AbortSignal
 ): Promise<{
   content: string;
   summary1Line: string;
   citedSourceIds: string[];
+  verification?: TurnVerification;
   elapsedSec: number;
   modelUsed: string;
   fallbackFrom?: string;
@@ -174,7 +263,14 @@ export async function runPerspectiveApi(
 export async function runSynthesizeApi(
   payload: {
     roomTitle: string;
-    messages: Array<{ handle?: string; perspectiveId?: string; content: string; round: number }>;
+    messages: Array<{
+      senderType?: 'user' | 'ai' | 'judge' | 'system';
+      handle?: string;
+      perspectiveId?: string;
+      laneId?: string;
+      content: string;
+      round: number;
+    }>;
     perspectives: Perspective[];
     sources: SourceItem[];
     anonymize: boolean;

@@ -126,10 +126,21 @@ class BridgeClient:
         self.max_retries = max(0, int(max_retries))
         self._transport = transport
 
-    def _headers(self) -> dict[str, str]:
+    def _headers(
+        self,
+        *,
+        ephemeral: bool = False,
+        exclude_lanes: list[str] | set[str] | None = None,
+    ) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
+        if ephemeral:
+            headers["X-DSH-Ephemeral"] = "1"
+        if exclude_lanes:
+            cleaned = sorted({str(x).strip() for x in exclude_lanes if str(x).strip()})
+            if cleaned:
+                headers["X-Exclude-Lanes"] = ",".join(cleaned)
         return headers
 
     def _make_client(self, timeout_s: float) -> httpx.AsyncClient:
@@ -163,6 +174,37 @@ class BridgeClient:
                     if not workers and raw_lanes:
                         workers = [l for l in raw_lanes if isinstance(l, dict)]
 
+                    profiles_list: list[dict[str, Any]] = []
+                    browser_name: str | None = None
+                    try:
+                        rp = await client.get(
+                            f"{self.base_url}/v1/profiles",
+                            headers=self._headers(),
+                            timeout=3.0,
+                        )
+                        if rp.status_code == 200 and rp.content:
+                            pdata = rp.json()
+                            if isinstance(pdata, dict):
+                                raw_profs = pdata.get("profiles") or []
+                                profiles_list = [p for p in raw_profs if isinstance(p, dict)]
+                                bname = str(pdata.get("browser_name") or "").strip()
+                                if bname:
+                                    browser_name = bname
+                    except Exception:
+                        pass
+
+                    profiles_by_id = {
+                        str(p.get("profile_id") or ""): p
+                        for p in profiles_list
+                        if p.get("profile_id")
+                    }
+                    profiles_by_lane: dict[str, dict[str, Any]] = {}
+                    for p in profiles_list:
+                        plid = str(p.get("lane_id") or "").strip()
+                        pslot = p.get("slot")
+                        if plid and (pslot is None or pslot == 0):
+                            profiles_by_lane.setdefault(plid, p)
+
                     lane_ids: list[str] = []
                     lane_details: list[dict[str, Any]] = []
                     healthy_count = 0
@@ -181,6 +223,17 @@ class BridgeClient:
                         if reachable and is_on and not auth_ok:
                             guest_detected = True
                         bridge_label = str(w.get("label") or lid).strip() or lid
+                        prof = profiles_by_lane.get(lid) or profiles_by_id.get(lid)
+                        acc_key = str(
+                            w.get("account_key")
+                            or (prof or {}).get("last_account_key")
+                            or ""
+                        ).strip()
+                        raw_overlaps = [
+                            str(ov.get("other_instance") or "").strip()
+                            for ov in (w.get("chain_overlap") or [])
+                            if isinstance(ov, dict) and ov.get("other_instance")
+                        ]
                         lane_details.append(
                             {
                                 "id": lid,
@@ -192,8 +245,27 @@ class BridgeClient:
                                 "authOk": auth_ok,
                                 "model": str(w.get("model") or self.default_model),
                                 "accountStatus": acc_status or ("AVAILABLE" if auth_ok else "GUEST"),
+                                "accountKey": acc_key,
+                                "duplicatedWith": raw_overlaps,
+                                "profileId": str((prof or {}).get("profile_id") or lid),
+                                "hasProfileData": bool((prof or {}).get("has_profile_data", False)),
+                                "loginOpen": bool((prof or {}).get("login_open", False)),
+                                "syncing": bool((prof or {}).get("syncing", False)),
+                                "lastSyncStatus": str((prof or {}).get("last_sync_status") or ""),
+                                "lastSyncError": (prof or {}).get("last_sync_error"),
+                                "lastSyncAt": int((prof or {}).get("last_sync_at") or 0),
                             }
                         )
+
+                    for d in lane_details:
+                        dups = list(d["duplicatedWith"])
+                        my_key = d["accountKey"]
+                        if my_key:
+                            for other in lane_details:
+                                if other["id"] != d["id"] and other["accountKey"] == my_key:
+                                    if other["id"] not in dups:
+                                        dups.append(other["id"])
+                        d["duplicatedWith"] = [x for x in dups if x and x != d["id"]]
 
                     return {
                         "mode": "bridge",
@@ -205,6 +277,7 @@ class BridgeClient:
                         "guestMode": guest_detected,
                         "bridgeOffline": False,
                         "defaultModel": self.default_model,
+                        "cookieSyncBrowser": browser_name,
                     }
 
                 # Fallback for single-worker bridge without Gateway /v1/lanes
@@ -255,6 +328,81 @@ class BridgeClient:
             "defaultModel": self.default_model,
         }
 
+    async def _admin_post(
+        self,
+        path: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        timeout_s: float = 30.0,
+    ) -> dict[str, Any]:
+        """Call a loopback Bridge admin/Profile Vault POST endpoint cleanly."""
+        if not self.base_url:
+            raise BridgeCallError("Chưa cấu hình BRIDGE_URL (vd: http://127.0.0.1:10000).")
+        headers = {**self._headers(), "Origin": self.base_url}
+        try:
+            async with self._make_client(timeout_s=timeout_s) as client:
+                resp = await client.post(
+                    f"{self.base_url}{path}",
+                    headers=headers,
+                    json=payload or {},
+                )
+        except Exception as exc:
+            raise BridgeCallError(f"Không kết nối được Bridge ({self.base_url}{path}): {exc}") from exc
+
+        try:
+            data = resp.json() if resp.content else {}
+        except ValueError:
+            data = {}
+        if resp.status_code >= 400:
+            err_obj = data.get("error") if isinstance(data, dict) else None
+            if isinstance(err_obj, dict):
+                err_msg = str(err_obj.get("message") or err_obj.get("code") or f"HTTP {resp.status_code}")
+            elif err_obj:
+                err_msg = str(err_obj)
+            else:
+                err_msg = resp.text[:220] or f"Bridge trả lỗi HTTP {resp.status_code}"
+            raise BridgeCallError(err_msg)
+        return data if isinstance(data, dict) else {"result": data}
+
+    async def create_lane(self) -> dict[str, Any]:
+        return await self._admin_post("/v1/lanes/create", {}, timeout_s=20.0)
+
+    async def start_lane_login(self, lane_id: str, label: str = "") -> dict[str, Any]:
+        lid = (lane_id or "").strip()
+        if not lid:
+            raise BridgeCallError("Thiếu mã luồng (lane_id).")
+        return await self._admin_post(
+            f"/v1/profiles/{lid}/login",
+            {"lane_id": lid, "slot": 0, "label": (label or lid).strip()},
+            timeout_s=15.0,
+        )
+
+    async def finish_lane_login(self, lane_id: str) -> dict[str, Any]:
+        lid = (lane_id or "").strip()
+        if not lid:
+            raise BridgeCallError("Thiếu mã luồng (lane_id).")
+        return await self._admin_post(
+            f"/v1/profiles/{lid}/finish-login",
+            {},
+            timeout_s=45.0,
+        )
+
+    async def sync_lane_cookie(self, lane_id: str, label: str = "") -> dict[str, Any]:
+        lid = (lane_id or "").strip()
+        if not lid:
+            raise BridgeCallError("Thiếu mã luồng (lane_id).")
+        payload: dict[str, Any] = {"lane_id": lid, "slot": 0}
+        if (label or "").strip():
+            payload["label"] = label.strip()
+        return await self._admin_post(
+            f"/v1/profiles/{lid}/sync",
+            payload,
+            timeout_s=45.0,
+        )
+
+    async def sync_all_lane_cookies(self) -> dict[str, Any]:
+        return await self._admin_post("/v1/profiles/sync-all", {}, timeout_s=120.0)
+
     async def resolve_lane_url(self, pinned_lane_id: str) -> str:
         """Resolve a pinned worker lane ID (e.g. 'acc1') via Gateway /v1/lanes to its direct loopback URL."""
         target_id = (pinned_lane_id or "").strip()
@@ -301,6 +449,7 @@ class BridgeClient:
         user_prompt: str,
         model: str | None = None,
         pinned_lane_id: str | None = None,
+        exclude_lanes: list[str] | set[str] | None = None,
     ) -> AdapterResult:
         """Send a stateless non-streaming single-user-message turn with retry/backoff."""
         if not self.base_url:
@@ -316,6 +465,10 @@ class BridgeClient:
             "stream": False,
             "messages": [{"role": "user", "content": combined_prompt}],
         }
+        req_headers = self._headers(
+            ephemeral=True,
+            exclude_lanes=None if clean_pin else exclude_lanes,
+        )
 
         retries = 0
         last_error = "Không kết nối được dsh-gemini-bridge."
@@ -324,7 +477,7 @@ class BridgeClient:
                 try:
                     resp = await client.post(
                         f"{target_base}/v1/chat/completions",
-                        headers=self._headers(),
+                        headers=req_headers,
                         json=payload,
                     )
                 except (httpx.ConnectError, httpx.TimeoutException, httpx.RemoteProtocolError) as exc:

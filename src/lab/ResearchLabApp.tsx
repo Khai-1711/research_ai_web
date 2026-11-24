@@ -16,6 +16,7 @@ import type {
   AppSettings,
   BridgeHealth,
   ChatMessage,
+  ConversationHistoryItem,
   LabViewTab,
   ModelOption,
   Perspective,
@@ -36,6 +37,7 @@ import {
   runPerspectiveApi,
   runSynthesizeApi,
   searchResearchApi,
+  uploadPdfSourceApi,
 } from '../utils/api.ts';
 import {
   formatLaneDisplay,
@@ -53,6 +55,47 @@ import { SettingsDrawer } from './SettingsDrawer.tsx';
 import { ActiveLaneJob, GroupFeed } from './GroupFeed.tsx';
 import { Composer } from './Composer.tsx';
 import { AuditView, CompareView, ReportView } from './SecondaryViews.tsx';
+
+function buildConversationHistorySnapshot(messages: ChatMessage[]): ConversationHistoryItem[] {
+  return messages
+    .filter(
+      (m): m is ChatMessage & { senderType: 'user' | 'ai' | 'judge' | 'system' } =>
+        (m.senderType === 'user' ||
+          m.senderType === 'ai' ||
+          m.senderType === 'judge' ||
+          m.senderType === 'system') &&
+        Boolean(m.content && m.content.trim())
+    )
+    .map((m) => ({
+      round: m.round,
+      senderType: m.senderType,
+      handle: m.handle,
+      content: m.content.trim(),
+      summary1Line: m.summary1Line,
+      preserveFull: Boolean(
+        m.preserveFull ||
+          m.pinnedToReport ||
+          m.senderType === 'system' ||
+          (m.handle && /nghiên_cứu|nghien_cuu|research|tài_liệu|tai_lieu/i.test(m.handle))
+      ),
+    }));
+}
+
+function buildSourcesDossierContent(sourcesList: SourceItem[], topic?: string): string {
+  const header = topic
+    ? `**Hồ sơ Tài liệu Nghiên cứu (${sourcesList.length} nguồn)** — Chủ đề: *${topic}*`
+    : `**Hồ sơ Tài liệu Nghiên cứu từ Kho nguồn (${sourcesList.length} nguồn)**`;
+  const blocks = sourcesList.map((s) => {
+    const levelTag =
+      s.contentLevel === 'full_text'
+        ? 'Toàn văn'
+        : s.contentLevel === 'abstract_only'
+        ? 'Chỉ có Tóm tắt'
+        : 'Trích đoạn';
+    return `### [${s.id}] ${s.title}\n- **Nguồn (${levelTag}):** ${s.origin} · [Liên kết gốc](${s.url})\n\n${s.excerpt}`;
+  });
+  return `${header}\n\n${blocks.join('\n\n---\n\n')}`;
+}
 
 interface ResearchLabAppProps {
   theme: ThemeMode;
@@ -94,6 +137,7 @@ export function ResearchLabApp({
   const [isBusy, setIsBusy] = useState(false);
   const [nowMs, setNowMs] = useState(Date.now());
   const abortRef = useRef<AbortController | null>(null);
+  const pipelineAbortedRef = useRef(false);
 
   const activeRoom = rooms.find((r) => r.id === activeRoomId) || rooms[0] || null;
 
@@ -316,6 +360,7 @@ export function ResearchLabApp({
   };
 
   const handleStopRunning = () => {
+    pipelineAbortedRef.current = true;
     abortRef.current?.abort();
     if (activeRoom) {
       emitFlowEventApi(activeRoom.id, {
@@ -362,7 +407,19 @@ export function ResearchLabApp({
 
     const runId = `run-${Date.now()}`;
     const runStartMs = Date.now();
-    const lanes = health?.lanes?.length ? health.lanes : ['acc1', 'acc2', 'acc3', 'acc4'];
+    const authenticatedLanes = (health?.laneDetails || [])
+      .filter((l) => l.reachable && l.control === 'on' && l.authOk)
+      .map((l) => l.id);
+    const lanes =
+      authenticatedLanes.length > 0
+        ? authenticatedLanes
+        : health?.lanes?.length
+        ? health.lanes
+        : ['acc1', 'acc2', 'acc3', 'acc4'];
+    const historySnapshot: ConversationHistoryItem[] =
+      round > 0 && roomSnapshot.messages.length > 0
+        ? buildConversationHistorySnapshot(roomSnapshot.messages)
+        : [];
 
     let workingRoom: Room = {
       ...roomSnapshot,
@@ -482,11 +539,19 @@ export function ResearchLabApp({
               prompt,
               sources: workingRoom.sources,
               round,
-              peerMessages,
+              conversationHistory: historySnapshot.length > 0 ? historySnapshot : undefined,
+              peerMessages: historySnapshot.length > 0 ? undefined : peerMessages,
               laneId,
+              detailMode: settings.detailMode || 'deep',
             },
             controller.signal
           );
+
+          const isDeepOrResearch =
+            (settings.detailMode || 'deep') === 'deep' ||
+            pattern === 'research' ||
+            /nghiên_cứu|nghien_cuu|research|tài_liệu|tai_lieu/i.test(p.handle) ||
+            p.tags.some((t) => /nghiên_cứu|nghien_cuu|research|tài_liệu|tai_lieu/i.test(t));
 
           const aiMsg: ChatMessage = {
             id: `m-ai-${p.id}-${Date.now()}`,
@@ -502,6 +567,8 @@ export function ResearchLabApp({
             summary1Line: result.summary1Line,
             content: result.content,
             citedSourceIds: result.citedSourceIds,
+            verification: result.verification,
+            preserveFull: isDeepOrResearch,
             fallbackFrom: result.fallbackFrom,
             createdAt: new Date().toISOString(),
           };
@@ -654,32 +721,32 @@ export function ResearchLabApp({
     });
   };
 
-  const handleAutoDebate = async () => {
-    if (!activeRoom || isBusy) return;
-    const targets = activeRoom.perspectives.filter((p) => p.enabled);
-    if (targets.length === 0) return;
+  const executeAutoDebate = async (roomSnapshot: Room): Promise<Room> => {
+    const targets = roomSnapshot.perspectives.filter((p) => p.enabled);
+    if (targets.length === 0) return roomSnapshot;
 
     const latestRound =
-      activeRoom.messages.length > 0 ? Math.max(...activeRoom.messages.map((m) => m.round)) : 0;
-    const peerMessages = activeRoom.messages
-      .filter((m) => m.senderType === 'ai' && m.round === latestRound && m.handle)
-      .map((m) => ({ handle: m.handle!, content: m.content }));
+      roomSnapshot.messages.length > 0 ? Math.max(...roomSnapshot.messages.map((m) => m.round)) : 0;
 
     const nextRound = latestRound + 1;
-    await runPerspectivesBatch({
-      roomSnapshot: activeRoom,
-      prompt: `Phản biện chéo các lập luận ở Vòng ${latestRound} về chủ đề "${activeRoom.title}". Nêu rõ điểm đồng ý, điểm phản bác và đề xuất điều chỉnh cụ thể.`,
+    return runPerspectivesBatch({
+      roomSnapshot,
+      prompt: `Phản biện chéo các lập luận và tài liệu nghiên cứu ở Vòng ${latestRound} về chủ đề "${roomSnapshot.title}". Hãy trích dẫn mã [S#], chỉ rõ điểm đồng ý, điểm phản bác, kẽ hở số liệu và đề xuất điều chỉnh cụ thể.`,
       targets,
       round: nextRound,
       roundLabel: `Vòng ${nextRound} · Phản biện chéo (${targets.length})`,
-      peerMessages,
       pattern: 'debate',
       includeUserMessage: false,
     });
   };
 
-  const handleRunJudge = async () => {
+  const handleAutoDebate = async () => {
     if (!activeRoom || isBusy) return;
+    pipelineAbortedRef.current = false;
+    await executeAutoDebate(activeRoom);
+  };
+
+  const executeJudge = async (roomSnapshot: Room): Promise<Room> => {
     setErrorBanner(null);
     setIsBusy(true);
     const controller = new AbortController();
@@ -689,17 +756,19 @@ export function ResearchLabApp({
     try {
       const res = await runSynthesizeApi(
         {
-          roomTitle: activeRoom.title,
-          messages: activeRoom.messages
-            .filter((m) => m.senderType === 'ai')
+          roomTitle: roomSnapshot.title,
+          messages: roomSnapshot.messages
+            .filter((m) => (m.senderType === 'ai' && Boolean(m.handle)) || m.senderType === 'user')
             .map((m) => ({
+              senderType: m.senderType,
               handle: m.handle,
               perspectiveId: m.perspectiveId,
+              laneId: m.laneId,
               content: m.content,
               round: m.round,
             })),
-          perspectives: activeRoom.perspectives,
-          sources: activeRoom.sources,
+          perspectives: roomSnapshot.perspectives,
+          sources: roomSnapshot.sources,
           anonymize: settings.anonymizeJudge,
           judgeModel: settings.judgeModel,
           judgeProviderId: settings.judgeProviderId,
@@ -712,7 +781,7 @@ export function ResearchLabApp({
       );
 
       const nextRound =
-        activeRoom.messages.length > 0 ? Math.max(...activeRoom.messages.map((m) => m.round)) : 0;
+        roomSnapshot.messages.length > 0 ? Math.max(...roomSnapshot.messages.map((m) => m.round)) : 0;
 
       const judgeMsg: ChatMessage = {
         id: `m-judge-${Date.now()}`,
@@ -727,16 +796,16 @@ export function ResearchLabApp({
       };
 
       const updated: Room = {
-        ...activeRoom,
+        ...roomSnapshot,
         report: res.report,
         livingOutline: res.livingOutline,
-        messages: [...activeRoom.messages, judgeMsg],
+        messages: [...roomSnapshot.messages, judgeMsg],
       };
       await persistRoom(updated);
       setRightTab('outline');
       setRightOpen(true);
 
-      await emitFlowEventApi(activeRoom.id, {
+      await emitFlowEventApi(roomSnapshot.id, {
         event_type: 'node_completed',
         run_id: runId,
         payload: {
@@ -757,31 +826,83 @@ export function ResearchLabApp({
           transport: { lane_id: res.laneId || 'bridge', started_offset_s: 1.0, elapsed_s: res.elapsedSec },
         },
       }).catch(() => {});
+      return updated;
     } catch (err) {
       if (!controller.signal.aborted) {
         setErrorBanner(err instanceof Error ? err.message : 'Lỗi chạy Trọng tài.');
       }
+      return roomSnapshot;
     } finally {
       setIsBusy(false);
       abortRef.current = null;
     }
   };
 
-  const handleRunDeepResearch = async (query: string) => {
+  const handleRunJudge = async () => {
     if (!activeRoom || isBusy) return;
+    pipelineAbortedRef.current = false;
+    await executeJudge(activeRoom);
+  };
+
+  const executeDeepResearch = async (roomSnapshot: Room, query: string): Promise<Room> => {
     setErrorBanner(null);
     setIsBusy(true);
     try {
       const searchRes = await searchResearchApi({ query });
-      const existingCount = activeRoom.sources.length;
+      const existingCount = roomSnapshot.sources.length;
       const newSources: SourceItem[] = searchRes.items.map((item, idx) => ({
         ...item,
         id: `S${existingCount + idx + 1}`,
       }));
 
+      const nextRound =
+        roomSnapshot.messages.length === 0
+          ? 0
+          : Math.max(...roomSnapshot.messages.map((m) => m.round)) + 1;
+      const roundLabel = `Vòng ${nextRound} · Deep Research (${newSources.length} nguồn mới)`;
+
+      const sourceTags = newSources.length
+        ? newSources.map((s) => `[${s.id}]`).join(', ')
+        : roomSnapshot.sources.map((s) => `[${s.id}]`).join(', ');
+
+      const researchPrompt = newSources.length
+        ? `Deep Research: Dựa trên toàn bộ hồ sơ tài liệu vừa nạp (${sourceTags}), hãy in các điểm dữ liệu/bằng chứng cốt lõi và phân tích chuyên sâu câu hỏi: ${query}`
+        : `Deep Research: Chưa tải thêm được nguồn mới từ thư viện mở; hãy phân tích chuyên sâu câu hỏi dựa trên kho nguồn hiện có${sourceTags ? ` (${sourceTags})` : ''}: ${query}`;
+
+      const insertedMessages: ChatMessage[] = [
+        {
+          id: `m-u-${Date.now()}`,
+          round: nextRound,
+          roundLabel,
+          senderType: 'user',
+          content: researchPrompt,
+          citedSourceIds: [],
+          createdAt: new Date().toISOString(),
+        },
+      ];
+
+      if (newSources.length > 0) {
+        insertedMessages.push({
+          id: `m-sys-${Date.now() + 1}`,
+          round: nextRound,
+          roundLabel,
+          senderType: 'system',
+          content: buildSourcesDossierContent(newSources, query),
+          summary1Line: `Hồ sơ tài liệu ${newSources.length} nguồn (${sourceTags})`,
+          citedSourceIds: newSources.map((s) => s.id),
+          preserveFull: true,
+          createdAt: new Date().toISOString(),
+        });
+      }
+
       const updatedRoom: Room = {
-        ...activeRoom,
-        sources: [...activeRoom.sources, ...newSources],
+        ...roomSnapshot,
+        title:
+          roomSnapshot.messages.length === 0 && roomSnapshot.title.startsWith('Phòng mới')
+            ? query.slice(0, 72)
+            : roomSnapshot.title,
+        sources: [...roomSnapshot.sources, ...newSources],
+        messages: [...roomSnapshot.messages, ...insertedMessages],
       };
       await persistRoom(updatedRoom);
       setRightTab('sources');
@@ -791,33 +912,91 @@ export function ResearchLabApp({
       setIsBusy(false);
       const targets = updatedRoom.perspectives.filter((p) => p.enabled);
       if (targets.length > 0) {
-        const nextRound =
-          updatedRoom.messages.length === 0
-            ? 0
-            : Math.max(...updatedRoom.messages.map((m) => m.round)) + 1;
-        await runPerspectivesBatch({
+        return await runPerspectivesBatch({
           roomSnapshot: updatedRoom,
-          prompt: `Deep Research: Dựa trên các nguồn mới nạp (${newSources
-            .map((s) => `[${s.id}]`)
-            .join(', ')}), hãy phân tích câu hỏi: ${query}`,
+          prompt: researchPrompt,
           targets,
           round: nextRound,
-          roundLabel: `Vòng ${nextRound} · Deep Research (${newSources.length} nguồn mới)`,
+          roundLabel,
           pattern: 'research',
+          includeUserMessage: false,
         });
       }
+      return updatedRoom;
     } catch (err) {
       setIsBusy(false);
       setErrorBanner(err instanceof Error ? err.message : 'Không tìm được nguồn Deep Research.');
+      return roomSnapshot;
     }
   };
 
-  const handleAttachUrlOrText = async (payload: { url?: string; title?: string; text?: string }) => {
+  const handleRunDeepResearch = async (query: string) => {
+    if (!activeRoom || isBusy) return;
+    pipelineAbortedRef.current = false;
+    await executeDeepResearch(activeRoom, query);
+  };
+
+  const handleRunFullPipeline = async (query: string) => {
+    if (!activeRoom || isBusy) return;
+    pipelineAbortedRef.current = false;
+    const afterResearch = await executeDeepResearch(activeRoom, query);
+    if (pipelineAbortedRef.current) return;
+    const afterDebate = await executeAutoDebate(afterResearch);
+    if (pipelineAbortedRef.current) return;
+    await executeJudge(afterDebate);
+  };
+
+  const handleDeleteSource = async (sourceId: string) => {
+    if (!activeRoom) return;
+    const updated: Room = {
+      ...activeRoom,
+      sources: activeRoom.sources.filter((s) => s.id !== sourceId),
+    };
+    if (highlightedSourceId === sourceId) {
+      setHighlightedSourceId(null);
+    }
+    await persistRoom(updated);
+  };
+
+  const handleInjectSourcesToChat = async () => {
+    if (!activeRoom || activeRoom.sources.length === 0) return;
+    const nextRound =
+      activeRoom.messages.length === 0
+        ? 0
+        : Math.max(...activeRoom.messages.map((m) => m.round));
+    const dossierMsg: ChatMessage = {
+      id: `m-sys-${Date.now()}`,
+      round: nextRound,
+      roundLabel: `Vòng ${nextRound} · Hồ sơ Tài liệu Kho nguồn (${activeRoom.sources.length})`,
+      senderType: 'system',
+      content: buildSourcesDossierContent(activeRoom.sources),
+      summary1Line: `Hồ sơ đầy đủ ${activeRoom.sources.length} nguồn từ Kho nguồn`,
+      citedSourceIds: activeRoom.sources.map((s) => s.id),
+      preserveFull: true,
+      createdAt: new Date().toISOString(),
+    };
+    const updated: Room = {
+      ...activeRoom,
+      messages: [...activeRoom.messages, dossierMsg],
+    };
+    await persistRoom(updated);
+    setViewTab('chat');
+  };
+
+  const handleAttachUrlOrText = async (payload: {
+    url?: string;
+    title?: string;
+    text?: string;
+    pdfFile?: File;
+  }) => {
     if (!activeRoom) return;
     const nextId = `S${activeRoom.sources.length + 1}`;
     let added: SourceItem;
 
-    if (payload.url) {
+    if (payload.pdfFile) {
+      const res = await uploadPdfSourceApi(payload.pdfFile);
+      added = { ...res.item, id: nextId };
+    } else if (payload.url) {
       const res = await searchResearchApi({ url: payload.url });
       if (!res.items[0]) throw new Error('Không trích xuất được nội dung từ URL.');
       added = { ...res.items[0], id: nextId };
@@ -828,6 +1007,8 @@ export function ResearchLabApp({
         title: payload.title || 'Đoạn trích người dùng đính kèm',
         excerpt: payload.text || '',
         url: '#local-document',
+        contentLevel: 'excerpt',
+        charCount: (payload.text || '').length,
         verified: true,
         addedAt: new Date().toISOString(),
       };
@@ -862,7 +1043,16 @@ export function ResearchLabApp({
     if (health?.guestMode) {
       return {
         tone: 'warn' as const,
-        text: 'Một số luồng đang chạy ở chế độ Khách (Guest Mode) — bạn có thể nạp cookie hoặc thêm API Key trong Cài đặt.',
+        text: 'Một số luồng Bridge chưa đăng nhập (Guest Mode) — bấm Mở Cài đặt để đăng nhập 1 lần hoặc Sync ngầm trực tiếp trên web.',
+      };
+    }
+    const duplicatedLanes = (health?.laneDetails || [])
+      .filter((l) => (l.duplicatedWith || []).length > 0)
+      .map((l) => l.id);
+    if (duplicatedLanes.length > 0) {
+      return {
+        tone: 'warn' as const,
+        text: `Phát hiện ${duplicatedLanes.join(', ')} đang dùng trùng tài khoản Google — hãy mở Cài đặt và bấm Đổi acc để tách luồng độc lập.`,
       };
     }
     if (health && health.healthyWorkers > 0 && settings.maxConcurrency > health.healthyWorkers) {
@@ -1220,10 +1410,17 @@ export function ResearchLabApp({
                 maxConcurrency={settings.maxConcurrency}
                 isBusy={isBusy}
                 approveResearchPlan={settings.approveResearchPlan}
+                detailMode={settings.detailMode || 'deep'}
+                onToggleDetailMode={() =>
+                  updateSettings({
+                    detailMode: (settings.detailMode || 'deep') === 'deep' ? 'standard' : 'deep',
+                  })
+                }
                 onSend={handleSend}
                 onAutoDebate={handleAutoDebate}
                 onRunJudge={handleRunJudge}
                 onRunDeepResearch={handleRunDeepResearch}
+                onRunFullPipeline={handleRunFullPipeline}
                 onAttachUrlOrText={handleAttachUrlOrText}
               />
             </>
@@ -1268,6 +1465,8 @@ export function ResearchLabApp({
           onFillGapsResearch={(gaps) => {
             handleRunDeepResearch(gaps.join('; '));
           }}
+          onDeleteSource={handleDeleteSource}
+          onInjectSourcesToChat={handleInjectSourcesToChat}
           isBusy={isBusy}
         />
       </div>

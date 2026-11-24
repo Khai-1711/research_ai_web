@@ -286,6 +286,7 @@ class ProviderStore:
         user_prompt: str,
         model: str | None = None,
         pinned_lane_id: str | None = None,
+        exclude_lanes: list[str] | set[str] | None = None,
     ) -> AdapterResult:
         prov = self.get_raw(provider_id)
         if prov is None:
@@ -301,6 +302,7 @@ class ProviderStore:
                     user_prompt=user_prompt,
                     model=chosen_model,
                     pinned_lane_id=pinned_lane_id,
+                    exclude_lanes=exclude_lanes,
                 )
             custom_bridge = BridgeClient(
                 prov["baseUrl"],
@@ -314,6 +316,7 @@ class ProviderStore:
                 user_prompt=user_prompt,
                 model=chosen_model,
                 pinned_lane_id=pinned_lane_id,
+                exclude_lanes=exclude_lanes,
             )
 
         if kind == "gemini_api":

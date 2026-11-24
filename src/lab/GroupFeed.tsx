@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   ArrowLeftRight,
+  BookOpen,
+  CheckCircle2,
   ChevronDown,
   ChevronUp,
   Clock,
@@ -69,8 +71,8 @@ export function GroupFeed({
   const activeCount = enabledPerspectives.length;
   const isDenseScale = totalN >= 4 || activeCount >= 4;
 
-  // User can override auto density
-  const [densityOverride, setDensityOverride] = useState<'auto' | 'compact' | 'expanded'>('auto');
+  // User can override density; default expanded so full research documents are immediately readable
+  const [densityOverride, setDensityOverride] = useState<'auto' | 'compact' | 'expanded'>('expanded');
   const [expandedIds, setExpandedIds] = useState<Record<string, boolean>>({});
   const [filterHandle, setFilterHandle] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
@@ -364,6 +366,54 @@ export function GroupFeed({
                   );
                 }
 
+                if (msg.senderType === 'system') {
+                  const isCollapsedDossier = Boolean(expandedIds[`sys-collapse-${msg.id}`]);
+                  return (
+                    <article
+                      key={msg.id}
+                      className="rounded-xl bg-[var(--surface)] border border-[var(--accent)]/45 px-5 py-4 space-y-2.5 shadow-[var(--shadow-card)]"
+                    >
+                      <div className="flex items-center justify-between gap-2 text-xs">
+                        <div className="flex items-center gap-2 font-semibold text-[var(--accent)]">
+                          <BookOpen className="w-4 h-4 shrink-0" />
+                          <span>Hồ sơ Tài liệu Nghiên cứu (Toàn văn cho Phản biện & Trọng tài)</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExpandedIds((prev) => ({
+                              ...prev,
+                              [`sys-collapse-${msg.id}`]: !prev[`sys-collapse-${msg.id}`],
+                            }))
+                          }
+                          className="inline-flex items-center gap-1 text-xs font-medium text-[var(--ink-secondary)] hover:text-[var(--accent)] cursor-pointer shrink-0"
+                        >
+                          {isCollapsedDossier ? (
+                            <>
+                              Mở tài liệu <ChevronDown className="w-3.5 h-3.5" />
+                            </>
+                          ) : (
+                            <>
+                              Thu gọn <ChevronUp className="w-3.5 h-3.5" />
+                            </>
+                          )}
+                        </button>
+                      </div>
+                      {!isCollapsedDossier ? (
+                        <MarkdownText
+                          text={msg.content}
+                          onCitationClick={onCitationClick}
+                          validSourceIds={validSourceIds}
+                        />
+                      ) : (
+                        <p className="text-xs text-[var(--ink-secondary)]">
+                          {msg.summary1Line || `${msg.citedSourceIds.length} nguồn tài liệu đã sẵn sàng cho Hội đồng AI.`}
+                        </p>
+                      )}
+                    </article>
+                  );
+                }
+
                 if (msg.senderType === 'judge') {
                   return (
                     <article
@@ -511,6 +561,55 @@ export function GroupFeed({
                           onCitationClick={onCitationClick}
                           validSourceIds={validSourceIds}
                         />
+                        {msg.verification &&
+                          (msg.verification.validCitations.length > 0 ||
+                            msg.verification.inferredCitations.length > 0 ||
+                            msg.verification.warnings.length > 0 ||
+                            msg.verification.numericClaimsChecked > 0) && (
+                            <div
+                              className={`px-3 py-2 rounded-lg border text-[11.5px] space-y-1 ${
+                                msg.verification.warnings.length > 0
+                                  ? 'bg-[var(--warn-soft)] border-[var(--warn)]/45 text-[var(--ink)]'
+                                  : 'bg-[var(--bg-subtle)] border-[var(--border)] text-[var(--ink-secondary)]'
+                              }`}
+                            >
+                              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono-num">
+                                <span
+                                  className={`inline-flex items-center gap-1 font-sans font-semibold ${
+                                    msg.verification.warnings.length > 0
+                                      ? 'text-[var(--warn)]'
+                                      : 'text-[var(--ok)]'
+                                  }`}
+                                >
+                                  {msg.verification.warnings.length > 0 ? (
+                                    <AlertTriangle className="w-3.5 h-3.5" />
+                                  ) : (
+                                    <CheckCircle2 className="w-3.5 h-3.5" />
+                                  )}
+                                  Kiểm chứng tự động
+                                </span>
+                                <span>
+                                  {msg.verification.validCitations.length} trích dẫn trực tiếp
+                                </span>
+                                {msg.verification.inferredCitations.length > 0 && (
+                                  <span>
+                                    {msg.verification.inferredCitations.length} suy luận rõ nguồn
+                                  </span>
+                                )}
+                                {msg.verification.numericClaimsChecked > 0 && (
+                                  <span>
+                                    Số liệu khớp: {msg.verification.numericClaimsMatched}/
+                                    {msg.verification.numericClaimsChecked}
+                                  </span>
+                                )}
+                              </div>
+                              {msg.verification.warnings.map((w, wIdx) => (
+                                <div key={wIdx} className="text-[var(--ink)]">
+                                  • {w}
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         <div className="pt-2.5 border-t border-[var(--border)] flex flex-wrap items-center gap-4 text-xs text-[var(--ink-secondary)]">
                           <button
                             type="button"

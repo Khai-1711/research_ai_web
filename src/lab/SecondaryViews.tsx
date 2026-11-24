@@ -236,6 +236,7 @@ export function ReportView({
   const citationStats = useMemo(() => {
     let totalFound = 0;
     let validCount = 0;
+    let inferredCount = 0;
     const allText = [
       room.report?.executiveSummary ?? '',
       ...room.messages.map((m) => m.content),
@@ -245,8 +246,22 @@ export function ReportView({
       totalFound++;
       if (validSourceIds.has(m.slice(1, -1))) validCount++;
     }
+    const infMatches =
+      allText.match(/\[\s*(?:Suy\s+luận\s+từ|Inference\s+from)\s+S\d+\s*\]/gi) ?? [];
+    inferredCount = infMatches.length;
+
+    const fullTextSources = room.sources.filter((s) => s.contentLevel === 'full_text').length;
+    const abstractSources = room.sources.filter((s) => s.contentLevel === 'abstract_only').length;
     const fallbacks = room.audit.filter((a) => Boolean(a.fallbackWarning)).length;
-    return { totalFound, validCount, invalidCount: totalFound - validCount, fallbacks };
+    return {
+      totalFound,
+      validCount,
+      invalidCount: totalFound - validCount,
+      inferredCount,
+      fullTextSources,
+      abstractSources,
+      fallbacks,
+    };
   }, [room, validSourceIds]);
 
   const handleDownloadMd = () => {
@@ -306,13 +321,28 @@ export function ReportView({
           <div className="p-3.5 rounded-xl border border-[var(--border)] bg-[var(--surface)] space-y-1.5 text-xs">
             <div className="flex items-center gap-1.5 font-semibold text-[var(--ok)]">
               <CheckCircle2 className="w-4 h-4" />
-              Citation Verifier
+              Kiểm chứng Toàn vẹn
             </div>
             <div className="font-mono-num text-[var(--ink-secondary)]">
               • {citationStats.validCount}/{citationStats.totalFound} mã [S#] hợp lệ
             </div>
+            {citationStats.inferredCount > 0 && (
+              <div className="font-mono-num text-[var(--ink-secondary)]">
+                • {citationStats.inferredCount} trích dẫn suy luận
+              </div>
+            )}
             <div className="font-mono-num text-[var(--ink-secondary)]">
               • {citationStats.invalidCount} trích dẫn không khớp
+            </div>
+            {report.verificationSummary && report.verificationSummary.totalNumericChecked > 0 && (
+              <div className="font-mono-num text-[var(--ink-secondary)]">
+                • Số liệu khớp: {report.verificationSummary.totalNumericMatched}/
+                {report.verificationSummary.totalNumericChecked}
+              </div>
+            )}
+            <div className="font-mono-num text-[var(--ink-muted)]">
+              • Nguồn: {citationStats.fullTextSources} toàn văn · {citationStats.abstractSources}{' '}
+              tóm tắt
             </div>
             {citationStats.fallbacks > 0 && (
               <div className="font-mono-num text-[var(--warn)]">
@@ -386,6 +416,17 @@ export function ReportView({
               <h2 className="font-display text-lg font-semibold text-[var(--ink)]">
                 4. Bảng điểm Trọng tài (tự co giãn theo {report.rubric.length} góc nhìn)
               </h2>
+              {report.evaluationWarnings && report.evaluationWarnings.length > 0 && (
+                <div className="p-3.5 rounded-xl border border-[var(--warn)]/60 bg-[var(--warn-soft)] space-y-1 text-xs text-[var(--ink)]">
+                  <div className="flex items-center gap-1.5 font-semibold text-[var(--warn)]">
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    Lưu ý trích xuất điểm Trọng tài
+                  </div>
+                  {report.evaluationWarnings.map((w, idx) => (
+                    <div key={idx}>• {w}</div>
+                  ))}
+                </div>
+              )}
               <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
                 <table className="w-full text-left text-sm">
                   <thead className="bg-[var(--bg-subtle)] text-xs text-[var(--ink-secondary)]">
@@ -404,7 +445,15 @@ export function ReportView({
                           className="py-2.5 px-4 font-sans font-semibold"
                           style={{ color: getPerspectiveColorVar(row.colorIndex) }}
                         >
-                          @{row.handle}
+                          <span>@{row.handle}</span>
+                          {row.fallbackScored && (
+                            <span
+                              title="Trọng tài không trả về đủ điểm JSON; hiển thị điểm cơ sở 5.0"
+                              className="ml-2 inline-block px-1.5 py-0.5 rounded bg-[var(--warn-soft)] text-[var(--warn)] text-[10px] font-medium align-middle"
+                            >
+                              Dự phòng
+                            </span>
+                          )}
                         </td>
                         <td className="py-2.5 px-4 text-right text-[var(--ink-secondary)]">
                           {row.evidence.toFixed(1)}

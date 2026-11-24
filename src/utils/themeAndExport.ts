@@ -91,6 +91,7 @@ export function loadSettings(): AppSettings {
         maxConcurrency: 3,
         approveResearchPlan: true,
         anonymizeJudge: true,
+        detailMode: 'deep',
         judgeModel: 'gemini-neon',
         judgeProviderId: 'bridge-local',
         judgeLaneId: '',
@@ -101,6 +102,7 @@ export function loadSettings(): AppSettings {
       maxConcurrency: parsed.maxConcurrency ?? 3,
       approveResearchPlan: parsed.approveResearchPlan ?? true,
       anonymizeJudge: parsed.anonymizeJudge ?? true,
+      detailMode: parsed.detailMode === 'standard' ? 'standard' : 'deep',
       judgeModel: parsed.judgeModel || 'gemini-neon',
       judgeProviderId: parsed.judgeProviderId || 'bridge-local',
       judgeLaneId: parsed.judgeLaneId || '',
@@ -110,6 +112,7 @@ export function loadSettings(): AppSettings {
       maxConcurrency: 2,
       approveResearchPlan: true,
       anonymizeJudge: true,
+      detailMode: 'deep',
     };
   }
 }
@@ -141,8 +144,9 @@ export function generateRoomMarkdown(room: Room): string {
       lines.push('| Góc nhìn | Bằng chứng | Logic | Phản biện | Tổng |');
       lines.push('| :--- | :---: | :---: | :---: | :---: |');
       for (const row of room.report.rubric) {
+        const tag = row.fallbackScored ? ' *(dự phòng)*' : '';
         lines.push(
-          `| @${row.handle} | ${row.evidence.toFixed(1)} | ${row.logic.toFixed(1)} | ${row.rebuttal.toFixed(1)} | **${row.total.toFixed(1)}** |`
+          `| @${row.handle}${tag} | ${row.evidence.toFixed(1)} | ${row.logic.toFixed(1)} | ${row.rebuttal.toFixed(1)} | **${row.total.toFixed(1)}** |`
         );
       }
       lines.push('');
@@ -153,6 +157,9 @@ export function generateRoomMarkdown(room: Room): string {
   for (const m of room.messages) {
     if (m.senderType === 'user') {
       lines.push(`### [Bạn · Vòng ${m.round}]`);
+      lines.push(m.content);
+    } else if (m.senderType === 'system') {
+      lines.push(`### [Hồ sơ Tài liệu Nghiên cứu · Vòng ${m.round}]`);
       lines.push(m.content);
     } else if (m.senderType === 'ai') {
       lines.push(

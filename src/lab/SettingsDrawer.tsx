@@ -1,10 +1,12 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   AlertTriangle,
+  Check,
   CheckCircle2,
   Cpu,
   Edit3,
   KeyRound,
+  LogIn,
   Plus,
   RefreshCw,
   Scale,
@@ -13,6 +15,7 @@ import {
   Trash2,
   UserPlus,
   X,
+  Zap,
 } from 'lucide-react';
 import type {
   AIProviderConfig,
@@ -23,9 +26,14 @@ import type {
   Perspective,
 } from '../types.ts';
 import {
+  createLaneApi,
   createProviderApi,
   deleteProviderApi,
+  finishLoginLaneApi,
+  loginLaneApi,
   renameLaneApi,
+  syncAllLanesApi,
+  syncLaneApi,
   testProviderApi,
 } from '../utils/api.ts';
 
@@ -119,10 +127,9 @@ export function SettingsDrawer({
   const [assignPrompt, setAssignPrompt] = useState('');
   const [assignTag, setAssignTag] = useState('Nghiên_cứu');
   const [assignModel, setAssignModel] = useState('gemini-neon');
+  const [vaultBusyKey, setVaultBusyKey] = useState<string | null>(null);
 
-  if (!open) return null;
-
-  const laneDetails: LaneInfo[] = health?.laneDetails?.length
+  const rawLaneDetails: LaneInfo[] = health?.laneDetails?.length
     ? health.laneDetails
     : (health?.lanes || []).map((id) => ({
         id,
@@ -135,6 +142,19 @@ export function SettingsDrawer({
         model: health?.defaultModel || 'gemini-4-hydrogen',
         accountStatus: 'AVAILABLE',
       }));
+
+  const hasPendingVaultLogin = rawLaneDetails.some((l) => l.loginOpen || l.syncing);
+  useEffect(() => {
+    if (!open || !hasPendingVaultLogin) return;
+    const timer = window.setInterval(() => {
+      void onRefreshProvidersAndModels();
+    }, 2500);
+    return () => window.clearInterval(timer);
+  }, [open, hasPendingVaultLogin, onRefreshProvidersAndModels]);
+
+  if (!open) return null;
+
+  const laneDetails = rawLaneDetails;
 
   const bridgeModels = models.filter((m) => m.providerId === 'bridge-local');
   const fallbackBridgeModels: ModelOption[] =
@@ -215,6 +235,111 @@ export function SettingsDrawer({
       ok: true,
       text: `Đã bốc ${lane.id}${lane.name && lane.name !== lane.id ? ` (${lane.name})` : ''} vào phòng với vai @${cleanHandle} (${roleLabel}).`,
     });
+  };
+
+  const handleCreateLane = async () => {
+    setVaultBusyKey('create-lane');
+    setFormMsg(null);
+    try {
+      const res = await createLaneApi();
+      await onRefreshProvidersAndModels();
+      setFormMsg({
+        ok: true,
+        text: `Đã tạo thêm luồng ${res.lane_id} (:${res.port}). Hãy bấm "Đăng nhập" trên thẻ ${res.lane_id} để nạp tài khoản Google riêng.`,
+      });
+    } catch (err) {
+      setFormMsg({
+        ok: false,
+        text: err instanceof Error ? err.message : 'Không tạo được luồng acc mới.',
+      });
+    } finally {
+      setVaultBusyKey(null);
+    }
+  };
+
+  const handleSyncAllLanes = async () => {
+    setVaultBusyKey('sync-all');
+    setFormMsg(null);
+    try {
+      const res = await syncAllLanesApi();
+      await onRefreshProvidersAndModels();
+      setFormMsg({
+        ok: res.total === 0 ? false : res.synced === res.total,
+        text:
+          res.total === 0
+            ? 'Chưa có profile nào đã đăng nhập để sync ngầm. Hãy bấm "Đăng nhập" trên từng acc trước.'
+            : `Đã sync ngầm xong ${res.synced}/${res.total} profile.`,
+      });
+    } catch (err) {
+      setFormMsg({
+        ok: false,
+        text: err instanceof Error ? err.message : 'Không sync ngầm được toàn bộ profile.',
+      });
+    } finally {
+      setVaultBusyKey(null);
+    }
+  };
+
+  const handleLaneLogin = async (lane: LaneInfo) => {
+    setVaultBusyKey(`login::${lane.id}`);
+    setFormMsg(null);
+    try {
+      const res = await loginLaneApi(lane.id, lane.name);
+      await onRefreshProvidersAndModels();
+      setFormMsg({
+        ok: true,
+        text:
+          res.message ||
+          `Đã mở cửa sổ trình duyệt thật cho ${lane.id}. Hãy đăng nhập Google + vào Gemini rồi đóng cửa sổ (hoặc bấm "Xong & Sync").`,
+      });
+    } catch (err) {
+      setFormMsg({
+        ok: false,
+        text: err instanceof Error ? err.message : `Không mở được trình duyệt đăng nhập cho ${lane.id}.`,
+      });
+    } finally {
+      setVaultBusyKey(null);
+    }
+  };
+
+  const handleFinishLaneLogin = async (lane: LaneInfo) => {
+    setVaultBusyKey(`finish::${lane.id}`);
+    setFormMsg(null);
+    try {
+      const res = await finishLoginLaneApi(lane.id);
+      await onRefreshProvidersAndModels();
+      setFormMsg({
+        ok: true,
+        text: `Đã lấy & nạp xong cookie cho ${lane.id}${res.account_key ? ` (${res.account_key.slice(0, 6)})` : ''}.`,
+      });
+    } catch (err) {
+      setFormMsg({
+        ok: false,
+        text: err instanceof Error ? err.message : `Không hoàn tất sync cho ${lane.id}.`,
+      });
+    } finally {
+      setVaultBusyKey(null);
+    }
+  };
+
+  const handleSyncLane = async (lane: LaneInfo) => {
+    setVaultBusyKey(`sync::${lane.id}`);
+    setFormMsg(null);
+    try {
+      const res = await syncLaneApi(lane.id, lane.name);
+      await onRefreshProvidersAndModels();
+      setFormMsg({
+        ok: true,
+        text: `Đã sync ngầm cookie mới cho ${lane.id}${res.account_key ? ` (${res.account_key.slice(0, 6)})` : ''}.`,
+      });
+    } catch (err) {
+      setFormMsg({
+        ok: false,
+        text: err instanceof Error ? err.message : `Sync ngầm ${lane.id} thất bại.`,
+      });
+    } finally {
+      setVaultBusyKey(null);
+    }
   };
 
   const healthyWorkers = health?.healthyWorkers ?? 0;
@@ -589,11 +714,35 @@ export function SettingsDrawer({
                       </div>
                     )}
 
-                    {/* Individual Bridge Accounts (acc1, acc2, acc3...) — Rename & Assign directly to a Role */}
+                    {/* Individual Bridge Accounts (acc1, acc2, acc3...) — CDP Login, Headless Sync, Rename & Assign */}
                     {isDefaultBridge && laneDetails.length > 0 && (
                       <div className="pt-2 mt-2 border-t border-[var(--border)] space-y-2">
-                        <div className="text-[11px] font-medium text-[var(--ink-secondary)]">
-                          Từng tài khoản Bridge — đặt tên riêng & bốc gán vai trò cụ thể:
+                        <div className="flex flex-wrap items-center justify-between gap-1.5">
+                          <div className="text-[11px] font-medium text-[var(--ink-secondary)]">
+                            Từng tài khoản Bridge ({health?.cookieSyncBrowser ? `CDP: ${health.cookieSyncBrowser}` : 'Profile Vault'})
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              disabled={vaultBusyKey !== null}
+                              onClick={handleSyncAllLanes}
+                              title="Sync ngầm tất cả tài khoản đã từng đăng nhập (0 tab mở)"
+                              className="px-2 py-0.5 rounded border border-[var(--border)] bg-[var(--surface)] text-[10.5px] text-[var(--ink-secondary)] hover:text-[var(--ink)] hover:border-[var(--accent)] inline-flex items-center gap-1 disabled:opacity-50 cursor-pointer"
+                            >
+                              <RefreshCw className={`w-2.5 h-2.5 ${vaultBusyKey === 'sync-all' ? 'animate-spin' : ''}`} />
+                              {vaultBusyKey === 'sync-all' ? 'Đang sync...' : 'Sync tất cả'}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={vaultBusyKey !== null}
+                              onClick={handleCreateLane}
+                              title="Tạo thêm luồng acc mới (.env.accN)"
+                              className="px-2 py-0.5 rounded bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent)] hover:text-[var(--accent-ink)] text-[10.5px] font-semibold inline-flex items-center gap-0.5 disabled:opacity-50 cursor-pointer"
+                            >
+                              <Plus className="w-2.5 h-2.5" />
+                              {vaultBusyKey === 'create-lane' ? 'Đang tạo...' : 'Thêm acc'}
+                            </button>
+                          </div>
                         </div>
                         {laneDetails.map((lane) => {
                           const isRenaming = renamingLaneId === lane.id;
@@ -601,6 +750,12 @@ export function SettingsDrawer({
                           const laneTestKey = `${p.id}::${lane.id}`;
                           const laneTest = testResults[laneTestKey];
                           const isReady = lane.reachable && lane.control === 'on' && lane.authOk;
+                          const hasDup = (lane.duplicatedWith || []).length > 0;
+                          const isLaneBusy =
+                            vaultBusyKey === `login::${lane.id}` ||
+                            vaultBusyKey === `finish::${lane.id}` ||
+                            vaultBusyKey === `sync::${lane.id}` ||
+                            vaultBusyKey === 'sync-all';
 
                           return (
                             <div
@@ -613,7 +768,9 @@ export function SettingsDrawer({
                                     <span
                                       className="w-2 h-2 rounded-full shrink-0"
                                       style={{
-                                        backgroundColor: isReady
+                                        backgroundColor: lane.loginOpen
+                                          ? 'var(--warn)'
+                                          : isReady
                                           ? 'var(--ok)'
                                           : lane.control === 'on'
                                           ? 'var(--warn)'
@@ -628,11 +785,14 @@ export function SettingsDrawer({
                                     </span>
                                   </div>
                                   <div className="text-[10.5px] text-[var(--ink-muted)] mt-0.5 font-mono-num">
-                                    {isReady
+                                    {lane.loginOpen
+                                      ? 'Đang mở trình duyệt đăng nhập...'
+                                      : isReady
                                       ? 'Đã đăng nhập Cookie'
                                       : lane.control !== 'on'
                                       ? 'Đang TẮT'
                                       : 'Chế độ Khách'}
+                                    {lane.accountKey ? ` · #${lane.accountKey.slice(0, 6)}` : ''}
                                     {lane.url ? ` · ${lane.url.replace(/^https?:\/\//, '')}` : ''}
                                   </div>
                                 </div>
@@ -677,6 +837,75 @@ export function SettingsDrawer({
                                   </button>
                                 </div>
                               </div>
+
+                              {/* Profile Vault Login / Sync controls */}
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                {lane.loginOpen ? (
+                                  <button
+                                    type="button"
+                                    disabled={isLaneBusy}
+                                    onClick={() => handleFinishLaneLogin(lane)}
+                                    className="px-2.5 py-1 rounded-md bg-[var(--ok)] text-white text-[11px] font-semibold inline-flex items-center gap-1 disabled:opacity-50 cursor-pointer"
+                                  >
+                                    <Check className="w-3 h-3" />
+                                    {vaultBusyKey === `finish::${lane.id}` ? 'Đang lấy cookie...' : 'Xong & Sync'}
+                                  </button>
+                                ) : (
+                                  <>
+                                    <button
+                                      type="button"
+                                      disabled={vaultBusyKey !== null}
+                                      onClick={() => handleLaneLogin(lane)}
+                                      title="Mở trình duyệt thật để đăng nhập 1 lần (qua 2FA/Passkey)"
+                                      className={`px-2.5 py-1 rounded-md text-[11px] font-medium inline-flex items-center gap-1 disabled:opacity-50 cursor-pointer ${
+                                        !isReady || hasDup
+                                          ? 'bg-[var(--accent)] text-[var(--accent-ink)] hover:bg-[var(--accent-hover)]'
+                                          : 'border border-[var(--border)] bg-[var(--bg)] text-[var(--ink-secondary)] hover:text-[var(--ink)] hover:border-[var(--accent)]'
+                                      }`}
+                                    >
+                                      <LogIn className="w-3 h-3" />
+                                      {vaultBusyKey === `login::${lane.id}`
+                                        ? 'Đang mở...'
+                                        : isReady && !hasDup
+                                        ? 'Đổi acc'
+                                        : hasDup
+                                        ? 'Đổi acc riêng'
+                                        : 'Đăng nhập 1 lần'}
+                                    </button>
+                                    {(lane.hasProfileData || isReady) && (
+                                      <button
+                                        type="button"
+                                        disabled={vaultBusyKey !== null || !lane.hasProfileData}
+                                        onClick={() => handleSyncLane(lane)}
+                                        title={
+                                          lane.hasProfileData
+                                            ? 'Tự làm mới cookie ngầm (~3-5s, 0 tab mở)'
+                                            : 'Hãy bấm Đăng nhập 1 lần trước để tạo Profile Vault trên đĩa'
+                                        }
+                                        className="px-2.5 py-1 rounded-md border border-[var(--border)] bg-[var(--bg)] text-[11px] text-[var(--ink-secondary)] hover:text-[var(--ink)] hover:border-[var(--accent)] inline-flex items-center gap-1 disabled:opacity-50 cursor-pointer"
+                                      >
+                                        <Zap className="w-3 h-3 text-[var(--accent)]" />
+                                        {vaultBusyKey === `sync::${lane.id}` ? 'Đang sync...' : 'Sync ngầm'}
+                                      </button>
+                                    )}
+                                  </>
+                                )}
+                              </div>
+
+                              {hasDup && (
+                                <div className="text-[11px] px-2 py-1.5 rounded-md bg-[var(--warn-soft)] text-[var(--warn)] flex items-start gap-1.5 border border-[var(--warn)]/30">
+                                  <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                                  <span>
+                                    Đang dùng trùng tài khoản Google với <strong>{(lane.duplicatedWith || []).join(', ')}</strong>. Hãy bấm <strong>Đổi acc riêng</strong> để tách luồng độc lập.
+                                  </span>
+                                </div>
+                              )}
+
+                              {!isReady && lane.lastSyncError && (
+                                <div className="text-[10.5px] px-2 py-1 rounded bg-[var(--danger-soft)] text-[var(--danger)]">
+                                  {lane.lastSyncError}
+                                </div>
+                              )}
 
                               {/* Inline rename input */}
                               {isRenaming && (

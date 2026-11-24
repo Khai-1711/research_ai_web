@@ -1,8 +1,11 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
+  BookOpen,
   CornerDownLeft,
+  FileUp,
   Link2,
   Play,
+  Rocket,
   Scale,
   Search,
   Sparkles,
@@ -18,11 +21,19 @@ interface ComposerProps {
   maxConcurrency: number;
   isBusy: boolean;
   approveResearchPlan: boolean;
+  detailMode: 'deep' | 'standard';
+  onToggleDetailMode: () => void;
   onSend: (prompt: string, targetPerspectives: Perspective[]) => void;
   onAutoDebate: (rounds: number) => void;
   onRunJudge: () => void;
   onRunDeepResearch: (query: string) => void;
-  onAttachUrlOrText: (payload: { url?: string; title?: string; text?: string }) => Promise<void>;
+  onRunFullPipeline: (query: string) => void;
+  onAttachUrlOrText: (payload: {
+    url?: string;
+    title?: string;
+    text?: string;
+    pdfFile?: File;
+  }) => Promise<void>;
 }
 
 export function resolveTargetsFromPrompt(
@@ -66,18 +77,23 @@ export function Composer({
   maxConcurrency,
   isBusy,
   approveResearchPlan,
+  detailMode,
+  onToggleDetailMode,
   onSend,
   onAutoDebate,
   onRunJudge,
   onRunDeepResearch,
+  onRunFullPipeline,
   onAttachUrlOrText,
 }: ComposerProps) {
   const [showUrlModal, setShowUrlModal] = useState(false);
   const [attachUrl, setAttachUrl] = useState('');
   const [attachNoteTitle, setAttachNoteTitle] = useState('');
   const [attachNoteBody, setAttachNoteBody] = useState('');
+  const [attachPdfFile, setAttachPdfFile] = useState<File | null>(null);
   const [attachBusy, setAttachBusy] = useState(false);
   const [attachError, setAttachError] = useState('');
+  const pdfInputRef = useRef<HTMLInputElement | null>(null);
 
   const [pendingResearchQuery, setPendingResearchQuery] = useState<string | null>(null);
 
@@ -147,17 +163,20 @@ export function Composer({
   const handleAttachSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setAttachError('');
-    if (!attachUrl.trim() && !attachNoteBody.trim()) {
-      setAttachError('Vui lòng dán một đường dẫn URL hoặc nhập đoạn trích tài liệu.');
+    if (!attachPdfFile && !attachUrl.trim() && !attachNoteBody.trim()) {
+      setAttachError('Vui lòng chọn tệp PDF, dán URL hoặc nhập đoạn trích tài liệu.');
       return;
     }
     setAttachBusy(true);
     try {
       await onAttachUrlOrText({
+        pdfFile: attachPdfFile || undefined,
         url: attachUrl.trim() || undefined,
         title: attachNoteTitle.trim() || undefined,
         text: attachNoteBody.trim() || undefined,
       });
+      setAttachPdfFile(null);
+      if (pdfInputRef.current) pdfInputRef.current.value = '';
       setAttachUrl('');
       setAttachNoteTitle('');
       setAttachNoteBody('');
@@ -220,8 +239,24 @@ export function Composer({
           </div>
         )}
 
-        {/* Quick workflow actions (calm, uncrowded) */}
+        {/* Quick workflow actions (calm, 1-click user controls) */}
         <div className="flex flex-wrap items-center gap-1.5">
+          <button
+            type="button"
+            disabled={isBusy}
+            onClick={() => {
+              const q =
+                value.trim() ||
+                'Nghiên cứu chuyên sâu, phản biện đa chiều và tổng hợp kết luận cho chủ đề phòng hiện tại';
+              if (value.trim()) onChange('');
+              onRunFullPipeline(q);
+            }}
+            title="Chạy trọn quy trình 1 chạm: Tìm nguồn sâu + In tài liệu → Hội đồng phân tích → Phản biện → Trọng tài chốt"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-[var(--accent)] bg-[var(--accent-soft)] hover:bg-[var(--accent)] text-xs font-semibold text-[var(--accent)] hover:text-[var(--accent-ink)] transition-colors disabled:opacity-50 whitespace-nowrap cursor-pointer"
+          >
+            <Rocket className="w-3 h-3" />
+            Chạy trọn quy trình
+          </button>
           <button
             type="button"
             disabled={isBusy}
@@ -257,6 +292,20 @@ export function Composer({
           >
             <Link2 className="w-3 h-3 text-[var(--accent)]" />
             URL / Tài liệu
+          </button>
+          <button
+            type="button"
+            disabled={isBusy}
+            onClick={onToggleDetailMode}
+            title="Chuyển đổi độ sâu câu trả lời: Chuyên sâu (in toàn văn tài liệu không giới hạn 230 từ) hoặc Súc tích"
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-medium transition-colors disabled:opacity-50 whitespace-nowrap cursor-pointer ${
+              detailMode === 'deep'
+                ? 'border-[var(--accent)]/60 bg-[var(--accent-soft)] text-[var(--accent)]'
+                : 'border-[var(--border)] bg-[var(--surface)] text-[var(--ink-secondary)] hover:text-[var(--ink)]'
+            }`}
+          >
+            <BookOpen className="w-3 h-3" />
+            {detailMode === 'deep' ? 'Tài liệu Chuyên sâu' : 'Chế độ Súc tích'}
           </button>
         </div>
 
@@ -344,13 +393,52 @@ export function Composer({
             <form onSubmit={handleAttachSubmit} className="space-y-3">
               <div>
                 <label className="block text-xs font-medium text-[var(--ink-secondary)] mb-1">
-                  Dán đường dẫn bài viết / arXiv / tài liệu công khai
+                  Tải tệp PDF nghiên cứu từ máy tính (toàn văn, tối đa 15 MB)
                 </label>
+                <input
+                  ref={pdfInputRef}
+                  type="file"
+                  accept=".pdf,application/pdf"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0] || null;
+                    setAttachPdfFile(f);
+                    setAttachError('');
+                  }}
+                  className="hidden"
+                />
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => pdfInputRef.current?.click()}
+                    className="flex-1 px-3 py-2 text-xs rounded-lg border border-dashed border-[var(--border-strong)] bg-[var(--bg)] hover:border-[var(--accent)] text-[var(--ink)] flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <FileUp className="w-3.5 h-3.5 text-[var(--accent)]" />
+                    <span className="truncate">
+                      {attachPdfFile ? attachPdfFile.name : 'Chọn file PDF (.pdf) trên máy…'}
+                    </span>
+                  </button>
+                  {attachPdfFile && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAttachPdfFile(null);
+                        if (pdfInputRef.current) pdfInputRef.current.value = '';
+                      }}
+                      title="Bỏ chọn file"
+                      className="p-2 rounded-lg border border-[var(--border)] text-[var(--ink-muted)] hover:text-[var(--danger)] cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="text-center text-[11px] text-[var(--ink-muted)]">hoặc dán đường dẫn bài viết / arXiv / DOI</div>
+              <div>
                 <input
                   type="url"
                   value={attachUrl}
                   onChange={(e) => setAttachUrl(e.target.value)}
-                  placeholder="https://arxiv.org/abs/..."
+                  placeholder="https://arxiv.org/abs/... hoặc https://doi.org/..."
                   className="w-full px-3 py-2 text-xs rounded-lg border border-[var(--border)] bg-[var(--bg)] text-[var(--ink)] focus:outline-none focus:border-[var(--accent)]"
                 />
               </div>
