@@ -6,8 +6,10 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import re
+import time
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
@@ -116,6 +118,7 @@ class BridgeClient:
         api_key: str = "",
         default_model: str = "gemini-4-hydrogen",
         timeout_s: float = 250.0,
+        idle_timeout_s: float | None = None,
         max_retries: int = 2,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
@@ -123,6 +126,11 @@ class BridgeClient:
         self.api_key = (api_key or "").strip()
         self.default_model = default_model
         self.timeout_s = float(timeout_s)
+        self.idle_timeout_s = (
+            float(idle_timeout_s)
+            if idle_timeout_s is not None
+            else (min(float(timeout_s), 90.0) if float(timeout_s) > 30.0 else float(timeout_s))
+        )
         self.max_retries = max(0, int(max_retries))
         self._transport = transport
 
@@ -130,6 +138,7 @@ class BridgeClient:
         self,
         *,
         ephemeral: bool = False,
+        research_mode: bool = False,
         exclude_lanes: list[str] | set[str] | None = None,
     ) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
@@ -137,6 +146,9 @@ class BridgeClient:
             headers["Authorization"] = f"Bearer {self.api_key}"
         if ephemeral:
             headers["X-DSH-Ephemeral"] = "1"
+        if research_mode:
+            headers["X-DSH-Research-Mode"] = "1"
+            headers["Accept"] = "text/event-stream, application/json"
         if exclude_lanes:
             cleaned = sorted({str(x).strip() for x in exclude_lanes if str(x).strip()})
             if cleaned:
@@ -450,8 +462,9 @@ class BridgeClient:
         model: str | None = None,
         pinned_lane_id: str | None = None,
         exclude_lanes: list[str] | set[str] | None = None,
+        on_status: Any = None,
     ) -> AdapterResult:
-        """Send a stateless non-streaming single-user-message turn with retry/backoff."""
+        """Send a stateless single-user-message turn using SSE liveness (keep-alive + phase updates)."""
         if not self.base_url:
             raise BridgeCallError("Chưa cấu hình BRIDGE_URL (vd: http://127.0.0.1:10000).")
 
@@ -462,24 +475,35 @@ class BridgeClient:
         combined_prompt = compile_stateless_user_prompt(system_instruction, user_prompt)
         payload = {
             "model": requested_model,
-            "stream": False,
+            "stream": True,
             "messages": [{"role": "user", "content": combined_prompt}],
         }
         req_headers = self._headers(
             ephemeral=True,
+            research_mode=True,
             exclude_lanes=None if clean_pin else exclude_lanes,
         )
 
+        async def _emit_status(st: dict[str, Any]) -> None:
+            if on_status is None:
+                return
+            res = on_status(st)
+            if inspect.isawaitable(res):
+                await res
+
         retries = 0
         last_error = "Không kết nối được dsh-gemini-bridge."
-        async with self._make_client(timeout_s=self.timeout_s) as client:
+        async with self._make_client(timeout_s=self.idle_timeout_s) as client:
             for attempt in range(self.max_retries + 1):
+                resp: httpx.Response | None = None
                 try:
-                    resp = await client.post(
+                    req = client.build_request(
+                        "POST",
                         f"{target_base}/v1/chat/completions",
                         headers=req_headers,
                         json=payload,
                     )
+                    resp = await client.send(req, stream=True)
                 except (httpx.ConnectError, httpx.TimeoutException, httpx.RemoteProtocolError) as exc:
                     last_error = f"Không kết nối được dsh-gemini-bridge ({target_base}): {exc}"
                     if attempt < self.max_retries:
@@ -488,69 +512,228 @@ class BridgeClient:
                         continue
                     raise BridgeCallError(last_error) from exc
 
-                if resp.status_code in RETRYABLE_STATUS:
-                    body_snippet = resp.text[:220]
-                    last_error = f"dsh-gemini-bridge trả HTTP {resp.status_code}: {body_snippet}"
-                    if attempt < self.max_retries:
-                        retries += 1
-                        retry_after = _parse_retry_after(resp.headers.get("retry-after"))
-                        wait_s = retry_after if retry_after is not None else min(20.0, 3.0 * (2**attempt))
-                        await asyncio.sleep(wait_s)
-                        continue
-                    raise BridgeCallError(last_error)
+                try:
+                    if resp.status_code in RETRYABLE_STATUS:
+                        raw_err = (await resp.aread()).decode("utf-8", errors="replace")
+                        body_snippet = raw_err[:220]
+                        last_error = f"dsh-gemini-bridge trả HTTP {resp.status_code}: {body_snippet}"
+                        if attempt < self.max_retries:
+                            retries += 1
+                            retry_after = _parse_retry_after(resp.headers.get("retry-after"))
+                            wait_s = retry_after if retry_after is not None else min(20.0, 3.0 * (2**attempt))
+                            await asyncio.sleep(wait_s)
+                            continue
+                        raise BridgeCallError(last_error)
 
-                if resp.status_code == 400 and "model_not_available" in resp.text and payload.get("model") != "auto":
-                    payload["model"] = "auto"
-                    retries += 1
-                    continue
+                    if resp.status_code == 400:
+                        raw_400 = (await resp.aread()).decode("utf-8", errors="replace")
+                        if "model_not_available" in raw_400 and payload.get("model") != "auto":
+                            payload["model"] = "auto"
+                            retries += 1
+                            continue
+                        raise BridgeCallError(
+                            f"dsh-gemini-bridge trả lỗi HTTP 400: {raw_400[:220]}"
+                        )
 
-                if resp.status_code != 200:
-                    raise BridgeCallError(
-                        f"dsh-gemini-bridge trả lỗi HTTP {resp.status_code}: {resp.text[:220]}"
+                    if resp.status_code != 200:
+                        raw_err = (await resp.aread()).decode("utf-8", errors="replace")
+                        raise BridgeCallError(
+                            f"dsh-gemini-bridge trả lỗi HTTP {resp.status_code}: {raw_err[:220]}"
+                        )
+
+                    lane_id = (resp.headers.get("x-gateway-lane") or clean_pin or "bridge").strip()
+                    ctype = (resp.headers.get("content-type") or "").lower()
+
+                    if "text/event-stream" in ctype:
+                        chunks: list[str] = []
+                        actual_model = requested_model
+                        fb_from_header = (resp.headers.get("x-fallback-from") or "").strip()
+                        fb_from_meta = ""
+                        cur_phase = "waiting_gemini"
+                        thought_chars = 0
+                        reply_chars = 0
+                        last_emit_ts = 0.0
+
+                        await _emit_status(
+                            {
+                                "phase": cur_phase,
+                                "laneId": lane_id,
+                                "model": actual_model,
+                                "thoughtChars": 0,
+                                "replyChars": 0,
+                                "heartbeat": False,
+                            }
+                        )
+
+                        try:
+                            async for raw_line in resp.aiter_lines():
+                                line = raw_line.rstrip("\r")
+                                now_ts = time.monotonic()
+                                if line.startswith(": dsh-status "):
+                                    try:
+                                        st = json.loads(line[len(": dsh-status ") :])
+                                    except ValueError:
+                                        st = None
+                                    if isinstance(st, dict):
+                                        cur_phase = str(st.get("phase") or cur_phase)
+                                        if st.get("model"):
+                                            actual_model = str(st["model"]).strip() or actual_model
+                                        if st.get("thought_chars") is not None:
+                                            thought_chars = int(st.get("thought_chars") or 0)
+                                        if st.get("reply_chars") is not None:
+                                            reply_chars = int(st.get("reply_chars") or 0)
+                                        last_emit_ts = now_ts
+                                        await _emit_status(
+                                            {
+                                                "phase": cur_phase,
+                                                "laneId": lane_id,
+                                                "model": actual_model,
+                                                "thoughtChars": thought_chars,
+                                                "replyChars": reply_chars,
+                                                "heartbeat": True,
+                                            }
+                                        )
+                                    continue
+
+                                if line.startswith(":"):
+                                    if (now_ts - last_emit_ts) >= 2.0:
+                                        last_emit_ts = now_ts
+                                        await _emit_status(
+                                            {
+                                                "phase": cur_phase,
+                                                "laneId": lane_id,
+                                                "model": actual_model,
+                                                "thoughtChars": thought_chars,
+                                                "replyChars": reply_chars,
+                                                "heartbeat": True,
+                                            }
+                                        )
+                                    continue
+
+                                if not line.startswith("data:"):
+                                    continue
+                                data_str = line[5:].strip()
+                                if not data_str:
+                                    continue
+                                if data_str == "[DONE]":
+                                    break
+                                try:
+                                    chunk = json.loads(data_str)
+                                except ValueError:
+                                    continue
+                                if not isinstance(chunk, dict):
+                                    continue
+
+                                if chunk.get("error"):
+                                    err_obj = chunk["error"]
+                                    err_msg = (
+                                        err_obj.get("message")
+                                        if isinstance(err_obj, dict)
+                                        else str(err_obj)
+                                    ) or "Bridge streaming error."
+                                    raise BridgeCallError(str(err_msg))
+
+                                if isinstance(chunk.get("dsh_meta"), dict):
+                                    meta = chunk["dsh_meta"]
+                                    if meta.get("actual_model"):
+                                        actual_model = str(meta["actual_model"]).strip() or actual_model
+                                    if meta.get("fallback_from"):
+                                        fb_from_meta = str(meta["fallback_from"]).strip()
+                                elif chunk.get("model"):
+                                    actual_model = str(chunk["model"]).strip() or actual_model
+
+                                ch_list = chunk.get("choices") or []
+                                if ch_list and isinstance(ch_list[0], dict):
+                                    delta_obj = ch_list[0].get("delta") or {}
+                                    if isinstance(delta_obj, dict):
+                                        piece = delta_obj.get("content")
+                                        if isinstance(piece, str) and piece:
+                                            chunks.append(piece)
+                                            reply_chars += len(piece)
+                                            prev_phase = cur_phase
+                                            cur_phase = "generating"
+                                            if prev_phase != "generating" or (now_ts - last_emit_ts) >= 0.8:
+                                                last_emit_ts = now_ts
+                                                await _emit_status(
+                                                    {
+                                                        "phase": "generating",
+                                                        "laneId": lane_id,
+                                                        "model": actual_model,
+                                                        "thoughtChars": thought_chars,
+                                                        "replyChars": reply_chars,
+                                                        "heartbeat": True,
+                                                    }
+                                                )
+                        except (httpx.ReadError, httpx.TimeoutException, httpx.RemoteProtocolError) as exc:
+                            last_error = f"Mất tín hiệu SSE từ dsh-gemini-bridge ({target_base}): {exc}"
+                            if not chunks and attempt < self.max_retries:
+                                retries += 1
+                                await asyncio.sleep(min(15.0, 2.0 * (2**attempt)))
+                                continue
+                            raise BridgeCallError(last_error) from exc
+
+                        content = "".join(chunks).strip()
+                        if not content:
+                            raise BridgeCallError("dsh-gemini-bridge trả về nội dung rỗng.")
+
+                        actual_model = (resp.headers.get("x-actual-model") or actual_model).strip()
+                        fallback_from = (fb_from_header or fb_from_meta).strip() or (
+                            requested_model if actual_model != requested_model else None
+                        )
+                        return AdapterResult(
+                            text=content,
+                            model_used=actual_model,
+                            lane_id=lane_id,
+                            fallback_from=fallback_from,
+                            retries=retries,
+                            raw_prompt=combined_prompt,
+                        )
+
+                    # JSON non-SSE fallback (e.g. unit test MockTransport or direct JSON response)
+                    raw_body = await resp.aread()
+                    try:
+                        data = json.loads(raw_body)
+                    except ValueError as exc:
+                        raise BridgeCallError("dsh-gemini-bridge trả phản hồi không phải JSON.") from exc
+
+                    choices = data.get("choices") or []
+                    content = ""
+                    if choices and isinstance(choices[0], dict):
+                        msg = choices[0].get("message") or {}
+                        raw_content = msg.get("content")
+                        if isinstance(raw_content, list):
+                            content = "".join(
+                                str(p.get("text", "")) for p in raw_content if isinstance(p, dict)
+                            ).strip()
+                        elif raw_content is not None:
+                            content = str(raw_content).strip()
+
+                    if not content:
+                        raise BridgeCallError("dsh-gemini-bridge trả về nội dung rỗng.")
+
+                    actual_model = (
+                        resp.headers.get("x-actual-model")
+                        or data.get("model")
+                        or requested_model
+                    ).strip()
+                    fallback_from = (
+                        resp.headers.get("x-fallback-from")
+                        or data.get("fallback_from")
+                        or ""
+                    ).strip() or (
+                        requested_model if actual_model != requested_model else None
                     )
 
-                try:
-                    data = resp.json()
-                except ValueError as exc:
-                    raise BridgeCallError("dsh-gemini-bridge trả phản hồi không phải JSON.") from exc
-
-                choices = data.get("choices") or []
-                content = ""
-                if choices and isinstance(choices[0], dict):
-                    msg = choices[0].get("message") or {}
-                    raw_content = msg.get("content")
-                    if isinstance(raw_content, list):
-                        content = "".join(
-                            str(p.get("text", "")) for p in raw_content if isinstance(p, dict)
-                        ).strip()
-                    elif raw_content is not None:
-                        content = str(raw_content).strip()
-
-                if not content:
-                    raise BridgeCallError("dsh-gemini-bridge trả về nội dung rỗng.")
-
-                lane_id = (resp.headers.get("x-gateway-lane") or clean_pin or "bridge").strip()
-                actual_model = (
-                    resp.headers.get("x-actual-model")
-                    or data.get("model")
-                    or requested_model
-                ).strip()
-                fallback_from = (
-                    resp.headers.get("x-fallback-from")
-                    or data.get("fallback_from")
-                    or ""
-                ).strip() or (
-                    requested_model if actual_model != requested_model else None
-                )
-
-                return AdapterResult(
-                    text=content,
-                    model_used=actual_model,
-                    lane_id=lane_id,
-                    fallback_from=fallback_from,
-                    retries=retries,
-                    raw_prompt=combined_prompt,
-                )
+                    return AdapterResult(
+                        text=content,
+                        model_used=actual_model,
+                        lane_id=lane_id,
+                        fallback_from=fallback_from,
+                        retries=retries,
+                        raw_prompt=combined_prompt,
+                    )
+                finally:
+                    await resp.aclose()
 
         raise BridgeCallError(last_error)
 

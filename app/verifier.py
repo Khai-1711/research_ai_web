@@ -135,11 +135,14 @@ def _split_sentences(text: str) -> list[str]:
         # Bỏ dòng ngăn cách bảng Markdown (| --- | --- |)
         if re.fullmatch(r"[\|\s:\-]+", line):
             continue
-        parts = re.split(r"(?<=[!?])\s+|(?<!\d)(?<=\.)\s+", line)
-        for part in parts:
-            s = part.strip()
-            if s:
-                sentences.append(s)
+        # Tách từng ô bảng Markdown độc lập để trích dẫn cột 1 không gắn nhầm số liệu cột 2
+        cells = [c.strip() for c in line.split("|") if c.strip()] if "|" in line else [line]
+        for cell in cells:
+            parts = re.split(r"(?<=[!?])\s+|(?<!\d)(?<=\.)\s+", cell)
+            for part in parts:
+                s = part.strip()
+                if s:
+                    sentences.append(s)
     return sentences
 
 

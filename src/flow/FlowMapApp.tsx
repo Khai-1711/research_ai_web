@@ -17,7 +17,7 @@ import {
   X,
 } from 'lucide-react';
 import type { FlowEvent, FlowViewTab, Room, ThemeMode } from '../types.ts';
-import { fetchRooms } from '../utils/api.ts';
+import { buildApiUrl, fetchRooms } from '../utils/api.ts';
 import {
   buildGraphFromEvents,
   FlowCanvasSvg,
@@ -94,7 +94,9 @@ export function FlowMapApp({
     setIsLiveMode(true);
     setIsPlaying(false);
 
-    const es = new EventSource(`/api/rooms/${encodeURIComponent(selectedRoomId)}/events`);
+    const es = new EventSource(
+      buildApiUrl(`/api/rooms/${encodeURIComponent(selectedRoomId)}/events`, true)
+    );
     es.onopen = () => setSseConnected(true);
     es.onerror = () => setSseConnected(false);
 

@@ -18,6 +18,7 @@ import type {
   ChatMessage,
   ConversationHistoryItem,
   LabViewTab,
+  LiveStreamStatus,
   ModelOption,
   Perspective,
   PerspectivePreset,
@@ -26,6 +27,7 @@ import type {
   ThemeMode,
 } from '../types.ts';
 import {
+  ApiError,
   createRoomApi,
   deleteRoomApi,
   emitFlowEventApi,
@@ -33,9 +35,12 @@ import {
   fetchModels,
   fetchProviders,
   fetchRooms,
+  getRemoteConfig,
+  isStaticPagesHost,
   patchRoomApi,
   runPerspectiveApi,
   runSynthesizeApi,
+  saveRemoteConfig,
   searchResearchApi,
   uploadPdfSourceApi,
 } from '../utils/api.ts';
@@ -136,6 +141,11 @@ export function ResearchLabApp({
   const [activeJobs, setActiveJobs] = useState<ActiveLaneJob[]>([]);
   const [isBusy, setIsBusy] = useState(false);
   const [nowMs, setNowMs] = useState(Date.now());
+  const [remoteConnectNeeded, setRemoteConnectNeeded] = useState(false);
+  const [inviteOrApiDraft, setInviteOrApiDraft] = useState(() => getRemoteConfig().apiBase);
+  const [tokenDraft, setTokenDraft] = useState(() => getRemoteConfig().shareToken);
+  const [connectError, setConnectError] = useState<string | null>(null);
+  const [connectingRemote, setConnectingRemote] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const pipelineAbortedRef = useRef(false);
 
@@ -152,38 +162,60 @@ export function ResearchLabApp({
     setProviders(providersRes.providers || []);
   }, []);
 
-  // Load rooms, health, live models, and providers on mount
-  useEffect(() => {
-    let alive = true;
-    Promise.all([
-      fetchRooms(),
-      fetchHealth().catch(() => null),
-      fetchModels().catch(() => ({ models: [] })),
-      fetchProviders().catch(() => ({ providers: [] })),
-    ])
-      .then(([roomsRes, healthRes, modelsRes, providersRes]) => {
-        if (!alive) return;
+  const loadWorkspace = useCallback(
+    async (withLoadingSpinner = true) => {
+      if (withLoadingSpinner) setLoading(true);
+      const cfg = getRemoteConfig();
+      if (isStaticPagesHost() && !cfg.apiBase) {
+        setRemoteConnectNeeded(true);
+        setConnectError(null);
+        setLoading(false);
+        return;
+      }
+      try {
+        const [roomsRes, healthRes, modelsRes, providersRes] = await Promise.all([
+          fetchRooms(),
+          fetchHealth().catch(() => null),
+          fetchModels().catch(() => ({ models: [] })),
+          fetchProviders().catch(() => ({ providers: [] })),
+        ]);
         setRooms(roomsRes.rooms);
         if (initialRoomId && roomsRes.rooms.some((r) => r.id === initialRoomId)) {
           setActiveRoomId(initialRoomId);
         } else if (roomsRes.rooms[0]) {
-          setActiveRoomId(roomsRes.rooms[0].id);
+          setActiveRoomId((prev) =>
+            prev && roomsRes.rooms.some((r) => r.id === prev) ? prev : roomsRes.rooms[0].id
+          );
         }
         if (healthRes) setHealth(healthRes);
         setModels(modelsRes.models || []);
         setProviders(providersRes.providers || []);
-      })
-      .catch((err) => {
-        if (!alive) return;
-        setErrorBanner(err instanceof Error ? err.message : 'Không tải được dữ liệu phòng.');
-      })
-      .finally(() => {
-        if (alive) setLoading(false);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [initialRoomId]);
+        setRemoteConnectNeeded(false);
+        setConnectError(null);
+        setErrorBanner(null);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Không tải được dữ liệu phòng.';
+        const isAuthOrRemote =
+          (err instanceof ApiError && err.status === 401) ||
+          isStaticPagesHost() ||
+          Boolean(getRemoteConfig().apiBase);
+        if (isAuthOrRemote) {
+          setRemoteConnectNeeded(true);
+          setConnectError(msg);
+        } else {
+          setErrorBanner(msg);
+        }
+      } finally {
+        setLoading(false);
+      }
+    },
+    [initialRoomId]
+  );
+
+  // Load rooms, health, live models, and providers on mount
+  useEffect(() => {
+    void loadWorkspace(true);
+  }, [loadWorkspace]);
 
   // Save lightweight UI preferences only
   useEffect(() => {
@@ -475,6 +507,7 @@ export function ResearchLabApp({
       handle: t.handle,
       colorIndex: t.colorIndex,
       laneId: t.pinnedLaneId || lanes[idx % lanes.length],
+      modelLabel: t.modelLabel,
       startedAtMs: Date.now(),
       status: 'queued',
       roundLabel,
@@ -544,7 +577,24 @@ export function ResearchLabApp({
               laneId,
               detailMode: settings.detailMode || 'deep',
             },
-            controller.signal
+            controller.signal,
+            (st: LiveStreamStatus) => {
+              setActiveJobs((prev) =>
+                prev.map((j) =>
+                  j.perspectiveId === p.id
+                    ? {
+                        ...j,
+                        phase: st.phase,
+                        laneId: st.laneId || j.laneId,
+                        modelLabel: st.model || j.modelLabel,
+                        thoughtChars: st.thoughtChars ?? j.thoughtChars,
+                        replyChars: st.replyChars ?? j.replyChars,
+                        lastHeartbeatMs: Date.now(),
+                      }
+                    : j
+                )
+              );
+            }
           );
 
           const isDeepOrResearch =
@@ -752,6 +802,24 @@ export function ResearchLabApp({
     const controller = new AbortController();
     abortRef.current = controller;
     const runId = `judge-${Date.now()}`;
+    const judgeLaneDisplay =
+      (settings.judgeProviderId || 'bridge-local') === 'bridge-local' && settings.judgeLaneId
+        ? settings.judgeLaneId
+        : 'Tự động';
+    const judgeModelDisplay = settings.judgeModel || health?.defaultModel || 'gemini-neon';
+
+    setActiveJobs([
+      {
+        perspectiveId: 'judge-active',
+        handle: 'Trọng_tài',
+        colorIndex: 0,
+        laneId: judgeLaneDisplay,
+        modelLabel: judgeModelDisplay,
+        startedAtMs: Date.now(),
+        status: 'running',
+        roundLabel: 'Tổng hợp & Chấm điểm',
+      },
+    ]);
 
     try {
       const res = await runSynthesizeApi(
@@ -777,7 +845,24 @@ export function ResearchLabApp({
               ? settings.judgeLaneId
               : undefined,
         },
-        controller.signal
+        controller.signal,
+        (st: LiveStreamStatus) => {
+          setActiveJobs((prev) =>
+            prev.map((j) =>
+              j.perspectiveId === 'judge-active'
+                ? {
+                    ...j,
+                    phase: st.phase,
+                    laneId: st.laneId || j.laneId,
+                    modelLabel: st.model || j.modelLabel,
+                    thoughtChars: st.thoughtChars ?? j.thoughtChars,
+                    replyChars: st.replyChars ?? j.replyChars,
+                    lastHeartbeatMs: Date.now(),
+                  }
+                : j
+            )
+          );
+        }
       );
 
       const nextRound =
@@ -834,6 +919,7 @@ export function ResearchLabApp({
       return roomSnapshot;
     } finally {
       setIsBusy(false);
+      setActiveJobs([]);
       abortRef.current = null;
     }
   };
@@ -1064,10 +1150,101 @@ export function ResearchLabApp({
     return null;
   })();
 
-  if (loading || !activeRoom) {
+  const handleRemoteConnectSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setConnectingRemote(true);
+    setConnectError(null);
+    const saved = saveRemoteConfig(inviteOrApiDraft, tokenDraft);
+    setInviteOrApiDraft(saved.apiBase);
+    setTokenDraft(saved.shareToken);
+    if (!saved.apiBase) {
+      setConnectError('Hãy dán Link mời đầy đủ hoặc nhập URL Tunnel HTTPS (ví dụ https://xxxx.trycloudflare.com).');
+      setConnectingRemote(false);
+      return;
+    }
+    await loadWorkspace(false);
+    setConnectingRemote(false);
+  };
+
+  if (loading) {
     return (
       <div className="h-screen flex items-center justify-center bg-[var(--bg)] text-[var(--ink-secondary)] text-sm">
         Đang mở Sổ tay Nghiên cứu…
+      </div>
+    );
+  }
+
+  if (remoteConnectNeeded || !activeRoom) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[var(--bg)] text-[var(--ink)] p-4">
+        <form
+          onSubmit={handleRemoteConnectSubmit}
+          className="w-full max-w-lg rounded-2xl border border-[var(--border)] bg-[var(--surface)] shadow-sm p-6 space-y-4"
+        >
+          <div className="space-y-1">
+            <div className="inline-flex items-center gap-2 text-xs font-semibold text-[var(--accent)]">
+              <Settings className="w-4 h-4" />
+              GitHub Pages · Kết nối Máy chủ Nghiên cứu
+            </div>
+            <h1 className="font-display text-lg font-semibold">
+              Kết nối tới Backend Cục bộ qua HTTPS Tunnel
+            </h1>
+            <p className="text-xs text-[var(--ink-secondary)] leading-relaxed">
+              Giao diện đang chạy tĩnh trên trình duyệt. Hãy dán <strong>Link mời 1 chạm</strong> từ chủ phòng, hoặc tự điền <strong>URL Tunnel HTTPS</strong> và <strong>Mã truy cập (Passcode)</strong> do lệnh{' '}
+              <code className="px-1 py-0.5 rounded bg-[var(--bg-subtle)]">python start.py share</code> tạo ra.
+            </p>
+          </div>
+
+          {connectError && (
+            <div className="p-2.5 rounded-lg border border-[var(--danger)]/30 bg-[var(--danger-soft)] text-[var(--danger)] text-xs flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>{connectError}</span>
+            </div>
+          )}
+
+          <div className="space-y-3">
+            <div>
+              <label
+                htmlFor="remote-api-input"
+                className="block text-xs font-medium text-[var(--ink-secondary)] mb-1"
+              >
+                Link mời 1 chạm hoặc URL Tunnel HTTPS
+              </label>
+              <input
+                id="remote-api-input"
+                type="text"
+                value={inviteOrApiDraft}
+                onChange={(e) => setInviteOrApiDraft(e.target.value)}
+                placeholder="https://xxxx.trycloudflare.com  hoặc dán nguyên link ?api=...#token=..."
+                className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-xs text-[var(--ink)] focus:outline-none focus:border-[var(--accent)]"
+              />
+            </div>
+            <div>
+              <label
+                htmlFor="remote-token-input"
+                className="block text-xs font-medium text-[var(--ink-secondary)] mb-1"
+              >
+                Mã truy cập (Passcode)
+              </label>
+              <input
+                id="remote-token-input"
+                type="password"
+                value={tokenDraft}
+                onChange={(e) => setTokenDraft(e.target.value)}
+                placeholder="Bỏ trống nếu bạn đã dán nguyên Link mời ở trên"
+                className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-xs text-[var(--ink)] focus:outline-none focus:border-[var(--accent)]"
+              />
+            </div>
+          </div>
+
+          <button
+            type="submit"
+            disabled={connectingRemote}
+            className="w-full py-2.5 rounded-xl bg-[var(--accent)] text-[var(--accent-ink)] text-xs font-semibold hover:bg-[var(--accent-hover)] disabled:opacity-60 cursor-pointer"
+          >
+            {connectingRemote ? 'Đang kiểm tra kết nối…' : 'Kết nối vào Phòng Nghiên cứu'}
+          </button>
+        </form>
       </div>
     );
   }

@@ -144,6 +144,7 @@ async def synthesize_judge_report(
     prov_store: ProviderStore,
     started_monotonic: float,
     time_fn,
+    on_status: Any = None,
 ) -> tuple[int, dict[str, Any]]:
     room_title = str(body.get("roomTitle") or "Nghiên cứu").strip()
     messages = list(body.get("messages") or [])
@@ -205,6 +206,7 @@ async def synthesize_judge_report(
         model=judge_model,
         pinned_lane_id=judge_lane_id,
         exclude_lanes=None if judge_lane_id else (used_lanes or None),
+        on_status=on_status,
     )
 
     parsed = parse_resilient_json(result.text)

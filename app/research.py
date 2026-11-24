@@ -81,7 +81,7 @@ def normalize_academic_query(raw_query: str) -> str:
                 break
 
     tokens = re.findall(r"[^\W_]+", cleaned, flags=re.UNICODE)
-    core_tokens = [t for t in tokens if len(t) >= 2 and t.lower() not in _QUERY_STOPWORDS]
+    core_tokens = [t for t in tokens if len(t) >= 2 and t.lower() not in _QUERY_STOPWORDS][:8]
     base_query = " ".join(core_tokens) if core_tokens else cleaned
 
     hints: list[str] = []
@@ -96,7 +96,7 @@ def normalize_academic_query(raw_query: str) -> str:
         ascii_or_keep = [
             t for t in core_tokens if all(ord(ch) < 128 for ch in t) or len(core_tokens) <= 4
         ]
-        combined = " ".join(ascii_or_keep + hints[:8]).strip()
+        combined = " ".join(ascii_or_keep[:6] + hints[:6]).strip()
         return combined or base_query
     return base_query or cleaned
 

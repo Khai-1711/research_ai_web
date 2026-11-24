@@ -25,6 +25,8 @@
   - Mọi AI bắt buộc chỉ gắn `[S#]` khi dữ kiện xuất hiện trực tiếp trong nguồn và dùng `[Suy luận từ S#]` cho phần tính toán/suy diễn thêm.
   - Sau mỗi lượt AI, backend đối chiếu tất định số liệu (`%`, số thập phân, cỡ mẫu `n=...`), phát hiện mã `[S#]` bịa đặt và cảnh báo nếu trích dẫn từ nguồn chỉ có tóm tắt; kết quả kiểm chứng hiển thị ngay trong khung **Kiểm chứng tự động** dưới câu trả lời và đưa vào cho Trọng tài chấm điểm.
 - **Hiển thị Markdown học thuật & Trọng tài ẩn danh (Blind Judge):** Kết xuất đầy đủ bảng GFM, tiêu đề, khối trích dẫn, code block, huy hiệu trích dẫn bấm để tô sáng nguồn; Trọng tài che tên thành `Ứng viên A/B/C…`, xuất bảng Rubric 3 trục (`Bằng chứng` / `Logic` / `Phản biện`), **Dàn ý sống** và Báo cáo 5 mục (tải `.md`).
+- **Luồng Nghiên cứu Ưu tiên Giữ Kết nối (`X-DSH-Research-Mode: 1` + SSE Liveness):** Không còn cắt cứng 180 giây hay tự hạ model thông minh (`gemini-carbon` / `gemini-neon` xuống `gemini-4-hydrogen`) khi AI đang suy luận sâu; giao diện hiển thị trạng thái sống thực tế (`queued_lock` → `waiting_gemini` → `thinking` → `generating` kèm nhịp tim heartbeat).
+- **Chia sẻ qua GitHub Pages tới Backend Cục bộ (`share-pages`):** Bạn bè (1–2 người) có thể mở giao diện tĩnh ngay trên GitHub Pages và kết nối an toàn tới backend đang chạy trên máy bạn qua HTTPS Tunnel (`python start.py share`) kèm Passcode tự sinh và khóa toàn bộ thao tác quản trị máy chủ.
 
 ### 2. Bản đồ Luồng AI Trực quan Độc lập (`/flow`)
 - **Tách biệt hoàn toàn (Zero Coupling):** Không chia sẻ DOM hay trạng thái nội bộ với giao diện Chat; chỉ lắng nghe SSE (`/api/rooms/{id}/events`) từ cùng tệp sự kiện append-only `events.jsonl`.
@@ -163,11 +165,21 @@ pytest -v
 npx tsc --noEmit
 ```
 
+### 4. Chia sẻ cho bạn bè dùng thử qua GitHub Pages (nhánh `share-pages`)
+1. Đẩy nhánh `share-pages` lên GitHub; workflow [deploy-pages.yml](.github/workflows/deploy-pages.yml) tự động build `dist/` với đường dẫn tương đối (`base: './'`) lên `https://khai-1711.github.io/research_ai_web/`.
+2. Tại thư mục gốc workspace trên máy bạn, chạy backend cục bộ (`python start.py`) và mở HTTPS Tunnel + mã Passcode trong terminal thứ 2:
+   ```bash
+   python start.py share
+   ```
+   *(Yêu cầu đã cài `cloudflared`; lệnh này tự tạo tệp `.share_token` nội bộ, kích hoạt bảo vệ trên cổng `:3000` và in sẵn **Link mời 1 chạm** dạng `https://khai-1711.github.io/research_ai_web/?api=<tunnel-url>#token=<passcode>` — hoặc mở **Cài đặt** ngay trên Web để bật/copy link.)*
+3. Bạn bè chỉ cần mở Link mời trên trình duyệt là dùng chung được ngay mà không cần cài Python/Node; token nằm trong `#fragment` và tự xóa khỏi thanh địa chỉ sau khi lưu vào `localStorage`.
+
 ---
 
 ## An toàn & Bảo mật
 
-- **Cô lập bí mật cục bộ:** Lịch sử phòng (`data/rooms/`), API key (`data/providers.json`), tên acc tự đặt (`data/lane_names.json`) và các tệp `.env` được chặn commit trong `.gitignore`. Toàn bộ API key được che (`AIza...9x2Q`) trước khi trả ra giao diện.
+- **Cô lập bí mật cục bộ:** Lịch sử phòng (`data/rooms/`), API key (`data/providers.json`), tên acc tự đặt (`data/lane_names.json`), `.share_token` và các tệp `.env` được chặn commit trong `.gitignore`. Toàn bộ API key được che (`AIza...9x2Q`) trước khi trả ra giao diện.
+- **Bảo vệ Tunnel & Khóa quyền Máy chủ:** Middleware trong `app/main.py` phân biệt truy cập trực tiếp từ máy chủ với truy cập qua proxy/tunnel (`Cf-Connecting-Ip`, `X-Forwarded-For`, `Origin` ngoài): mọi yêu cầu từ xa thiếu `X-Share-Token` / `share_token` đều nhận `401`, và mọi API tác động lên máy chủ (mở trình duyệt đăng nhập cookie, `Sync ngầm`, tạo acc mới, thêm/xóa API key, xem `.share_token`) bị chặn cứng `403` từ xa.
 - **Cô lập phiên Bridge (`X-DSH-Ephemeral: 1`):** Mỗi lượt nghiên cứu chạy độc lập hoàn toàn trên Bridge, không đọc/ghi vào sổ ghi nhớ hoặc tệp handoff của các tác vụ khác và không lưu đè trạng thái phiên chat.
 - **Chống SSRF đa chặng:** Mọi URL nạp vào Deep Research hoặc tự tải PDF nguồn mở đều được kiểm tra dải IP công khai (chặn loopback, mạng nội bộ, link-local) trước khi kết nối và tại từng bước chuyển hướng `Location` tối đa 5 chặng (`app/research.py`).
 - **Tải PDF an toàn:** Tệp `.pdf` tải lên qua `/api/research/upload-pdf` bị chặn ở ngưỡng **15 MB**, kiểm tra chữ ký `%PDF-`, và báo lỗi rõ nếu PDF chỉ là bản quét hình ảnh chưa có lớp chữ.
@@ -177,10 +189,11 @@ npx tsc --noEmit
 
 ## Kiểm thử tự động đã xác minh (`tests/test_backend.py`)
 
-`pytest -v` — **27/27 passed**:
-- Nhóm Bridge & Định tuyến (`test_compile_stateless_merges_system_into_user_prompt`, `test_health_accurately_counts_workers_and_detects_guest_mode`, `test_perspective_uses_single_user_message_reads_gateway_lane_and_retries_429`, `test_lane_rename_and_pinned_lane_direct_routing`, `test_bridge_ephemeral_and_synthesize_exclude_lanes`)
+`pytest -v` — **31/31 passed**:
+- Nhóm Bridge, Định tuyến & Giữ kết nối Nghiên cứu (`test_compile_stateless_merges_system_into_user_prompt`, `test_health_accurately_counts_workers_and_detects_guest_mode`, `test_perspective_uses_single_user_message_reads_gateway_lane_and_retries_429`, `test_lane_rename_and_pinned_lane_direct_routing`, `test_bridge_ephemeral_and_synthesize_exclude_lanes`, `test_bridge_client_chat_stateless_streams_liveness_and_keeps_model`, `test_perspective_sse_endpoint_emits_status_and_result_events`)
+- Nhóm Bảo mật Chia sẻ Từ xa (`test_remote_share_security_middleware_blocks_unauthed_and_host_admin_routes`)
 - Nhóm Profile Vault & Proxy Cookie (`test_health_merges_profile_vault_and_detects_duplicate_account_keys`, `test_lane_profile_vault_proxy_endpoints_forward_origin_and_payloads`, `test_lane_profile_vault_propagates_bridge_error_as_502`)
 - Nhóm Ngữ cảnh Đa vòng & Chế độ Chuyên sâu (`test_perspective_round_0_omits_conversation_history_block`, `test_perspective_round_1_includes_full_latest_round_roles`, `test_perspective_compresses_older_rounds_and_respects_max_history_chars`, `test_perspective_prefers_conversation_history_over_peer_messages_and_keeps_legacy_fallback`, `test_research_role_unlocks_deep_length_and_preserves_full_dossier_for_critics`)
 - Nhóm Trọng tài ẩn danh & Sửa JSON (`test_resilient_json_parses_fenced_and_trailing_comma`, `test_synthesize_handles_malformed_json_and_unmasks_aliases`, `test_judge_prompt_includes_source_excerpts_and_user_turns`, `test_judge_missing_scores_marks_fallback_instead_of_fake_8_0`, `test_judge_bidirectional_anonymization_masks_and_unmasks_all_fields`)
-- Nhóm Tìm kiếm Học thuật, PDF, SSRF & Kiểm chứng (`test_ssrf_blocks_loopback_and_private_ips`, `test_research_query_normalization_and_long_source_excerpts`, `test_fetch_url_multi_hop_redirect_and_ssrf_block`, `test_upload_pdf_extracts_fulltext_and_rejects_invalid_bytes`, `test_search_upgrades_open_access_arxiv_to_fulltext_pdf`, `test_verifier_detects_fabricated_numbers_and_distinguishes_inferences`)
+- Nhóm Tìm kiếm Học thuật, PDF, SSRF & Kiểm chứng (`test_ssrf_blocks_loopback_and_private_ips`, `test_research_query_normalization_and_long_source_excerpts`, `test_fetch_url_multi_hop_redirect_and_ssrf_block`, `test_upload_pdf_extracts_fulltext_and_rejects_invalid_bytes`, `test_search_upgrades_open_access_arxiv_to_fulltext_pdf`, `test_verifier_detects_fabricated_numbers_and_distinguishes_inferences`, `test_verifier_splits_markdown_table_cells_without_cross_cell_false_positives`)
 - Nhóm Lưu trữ & Nhà cung cấp (`test_room_crud_and_flow_events_jsonl`, `test_providers_mask_secrets_and_models_discovery`, `test_empty_storage_creates_single_clean_room_without_examples`)

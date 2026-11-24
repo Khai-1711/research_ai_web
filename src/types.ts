@@ -243,6 +243,18 @@ export interface LaneInfo {
   lastSyncAt?: number;
 }
 
+export type LiveTurnPhase = 'queued_lock' | 'waiting_gemini' | 'thinking' | 'generating';
+
+export interface LiveStreamStatus {
+  phase: LiveTurnPhase;
+  laneId?: string;
+  model?: string;
+  thoughtChars?: number;
+  replyChars?: number;
+  heartbeat?: boolean;
+  elapsedS?: number;
+}
+
 export interface BridgeHealth {
   mode: 'bridge' | 'gemini-preview';
   bridgeUrl: string | null;
@@ -254,6 +266,8 @@ export interface BridgeHealth {
   bridgeOffline: boolean;
   defaultModel: string;
   cookieSyncBrowser?: string | null;
+  isLocalOwner?: boolean;
+  shareProtected?: boolean;
 }
 
 export interface ModelOption {

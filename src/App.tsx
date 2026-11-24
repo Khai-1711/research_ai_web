@@ -5,6 +5,7 @@ import {
   loadTheme,
   THEME_STORAGE_KEY,
 } from './utils/themeAndExport.ts';
+import { isStaticPagesHost } from './utils/api.ts';
 import { ResearchLabApp } from './lab/ResearchLabApp.tsx';
 import { FlowMapApp } from './flow/FlowMapApp.tsx';
 
@@ -12,8 +13,15 @@ function readRouteFromLocation(): { surface: AppSurface; roomId?: string } {
   const path = window.location.pathname;
   const params = new URLSearchParams(window.location.search);
   const roomId = params.get('room') || undefined;
+  const view = params.get('view') || '';
+  const isFlow =
+    path === '/flow' ||
+    path.endsWith('/flow') ||
+    path.endsWith('/flow/') ||
+    view === 'flow' ||
+    window.location.hash.startsWith('#flow');
   return {
-    surface: path.startsWith('/flow') ? 'flow' : 'lab',
+    surface: isFlow ? 'flow' : 'lab',
     roomId,
   };
 }
@@ -56,9 +64,35 @@ export default function App() {
   }, []);
 
   const navigate = useCallback((surface: AppSurface, roomId?: string) => {
-    const base = surface === 'flow' ? '/flow' : '/';
-    const url = roomId ? `${base}?room=${encodeURIComponent(roomId)}` : base;
-    window.history.pushState({}, '', url);
+    const curUrl = new URL(window.location.href);
+    const onSubpath =
+      isStaticPagesHost() ||
+      (curUrl.pathname !== '/' && curUrl.pathname !== '/flow');
+
+    if (onSubpath) {
+      if (surface === 'flow') {
+        curUrl.searchParams.set('view', 'flow');
+      } else {
+        curUrl.searchParams.delete('view');
+      }
+      if (roomId) {
+        curUrl.searchParams.set('room', roomId);
+      } else {
+        curUrl.searchParams.delete('room');
+      }
+      const nextUrl = `${curUrl.pathname}${curUrl.search}${curUrl.hash}`;
+      window.history.pushState({}, '', nextUrl);
+    } else {
+      curUrl.pathname = surface === 'flow' ? '/flow' : '/';
+      curUrl.searchParams.delete('view');
+      if (roomId) {
+        curUrl.searchParams.set('room', roomId);
+      } else {
+        curUrl.searchParams.delete('room');
+      }
+      const nextUrl = `${curUrl.pathname}${curUrl.search}`;
+      window.history.pushState({}, '', nextUrl);
+    }
     setRoute({ surface, roomId });
   }, []);
 

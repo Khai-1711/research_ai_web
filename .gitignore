@@ -6,6 +6,9 @@ coverage/
 *.log
 .env*
 !.env.example
+.share_token
+*.pem
+*.key
 data/
 .venv/
 __pycache__/

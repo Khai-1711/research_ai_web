@@ -25,6 +25,8 @@
   - System prompts strictly separate verbatim/factual source claims (`[S#]`) from AI-computed extrapolations (`[Suy luận từ S#]`).
   - Every response is deterministically audited for hallucinated source IDs, abstract-only citations, and quantitative numeric claims (`%`, decimals, sample sizes `n=...`), surfacing **Kiểm chứng tự động** cards in the chat feed and feeding an objective audit report to Blind Judge.
 - **Rich Academic Markdown & Blind Judge Synthesis:** Full GFM Markdown rendering (tables, headings, blockquotes, code blocks, clickable citation pills), bidirectional anonymization (`Ứng viên A/B/C…`), 3-axis Rubric scoring (`Evidence` / `Logic` / `Rebuttal`), **Living Outline**, and 5-section Markdown report export.
+- **Liveness-First Deep Research Streaming (`X-DSH-Research-Mode: 1` + SSE Heartbeat):** Research turns lift the 180s wall-clock cap and avoid automatic 50s smart-model downgrades (`gemini-carbon` / `gemini-neon` stays active), streaming live progress (`queued_lock` → `waiting_gemini` → `thinking` → `generating`) and keep-alive heartbeats end-to-end.
+- **GitHub Pages Sharing to Local Backend (`share-pages`):** Deploy the static frontend on GitHub Pages while letting 1–2 trusted friends connect to your local backend over a passcode-protected HTTPS tunnel (`python start.py share`) with host-admin controls locked remotely.
 
 ### 2. Independent Visual AI Flow Map (`/flow`)
 - **Zero-Coupling Live Visualization:** Shares zero DOM/state with the Chat surface; subscribes exclusively via Server-Sent Events (`/api/rooms/{id}/events`) to the same append-only `events.jsonl` log.
@@ -152,11 +154,21 @@ pytest -v
 npx tsc --noEmit
 ```
 
+### 4. Share Safely via GitHub Pages (`share-pages` branch)
+1. Push the `share-pages` branch to GitHub; [deploy-pages.yml](.github/workflows/deploy-pages.yml) builds `dist/` with relative asset paths (`base: './'`) to `https://khai-1711.github.io/research_ai_web/`.
+2. Start the local stack (`python start.py`), then start the HTTPS tunnel & share passcode in a second terminal from the workspace root:
+   ```bash
+   python start.py share
+   ```
+   *(Requires `cloudflared`; generates `.share_token`, enables passcode auth on `:3000`, and prints a 1-click invite URL `?api=<https-tunnel>#token=<passcode>` — you can also enable/copy the invite link inside **Settings**.)*
+3. Friends simply open the invite link in their browser without installing Python or Node; the `#token` fragment is stored in `localStorage` and scrubbed from the URL bar automatically.
+
 ---
 
 ## Security & Privacy
 
-- **Local-First Secret Isolation:** Runtime room histories (`data/rooms/`), user API keys (`data/providers.json`), custom account names (`data/lane_names.json`), and `.env` files are excluded via `.gitignore`. API keys are masked (`AIza...9x2Q`) in every API response.
+- **Local-First Secret Isolation:** Runtime room histories (`data/rooms/`), user API keys (`data/providers.json`), custom account names (`data/lane_names.json`), `.share_token`, and `.env` files are excluded via `.gitignore`. API keys are masked (`AIza...9x2Q`) in every API response.
+- **Tunnel Auth & Host-Admin Lockdown (`app/main.py`):** Distinguishes direct local loopback requests from proxied/tunnel requests (`Cf-Connecting-Ip`, `X-Forwarded-For`, external `Origin`): unauthenticated remote API calls receive `401`, and host-only machine endpoints (browser cookie login, worker creation, provider key creation/deletion, `.share_token` viewing) return `403` for remote callers.
 - **Stateless Bridge Isolation (`X-DSH-Ephemeral: 1`):** Research requests instruct Bridge workers never to read or mutate persistent chat sessions, model defaults, transcripts, or coding handoff ledgers.
 - **Multi-Hop SSRF Defense (`app/research.py`):** Rejects non-HTTP(S) schemes, private/loopback/link-local IPs, and `.local`/`.internal` hostnames before DNS resolution and on every HTTP `Location` redirect hop (up to 5 hops).
 - **Safe Local PDF Ingestion:** `/api/research/upload-pdf` enforces a strict **15 MB** cap and `%PDF-` signature validation, returning clean `400`/`413` errors on invalid or image-only PDFs.
@@ -166,10 +178,11 @@ npx tsc --noEmit
 
 ## Verified Test Coverage (`tests/test_backend.py`)
 
-`pytest -v` — **27/27 passed**:
-- **Bridge, Routing & Ephemeral Isolation:** stateless prompt compilation, gateway worker/guest status, single-user turns + `429` retry, custom lane naming + fail-closed pinned routing, `X-DSH-Ephemeral: 1` + `X-Exclude-Lanes`.
+`pytest -v` — **31/31 passed**:
+- **Bridge, Routing, Ephemeral & Research Liveness:** stateless prompt compilation, gateway worker/guest status, single-user turns + `429` retry, custom lane naming + fail-closed pinned routing, `X-DSH-Ephemeral: 1` + `X-Exclude-Lanes`, SSE liveness parsing (`: dsh-status`, `: keep-alive`, kept model) and `/api/ai/perspective` SSE streaming.
+- **Remote Tunnel Security Middleware:** `401` + CORS rejection without token via proxy headers, `X-Share-Token` / `share_token` auth, `isLocalOwner` flags, and strict `403` host-admin lock vs direct local owner access.
 - **Profile Vault Proxying:** merging vault health + duplicate-account detection, origin/payload forwarding on login/sync endpoints, fail-closed `502` propagation.
 - **Deep Context & Multi-Round History:** Round 0 history omission, Round 1 full peer context, `60,000`-char deep history preservation & older-turn compression, research dossier preservation.
 - **Blind Judge & Resilient JSON:** fenced/malformed JSON recovery, source excerpts + verification report injection, fallback score flagging, bidirectional anonymization/unmasking.
-- **Academic Search, PDF Ingestion, SSRF & Verifier:** loopback/private IP blocking, multi-hop redirect SSRF blocking, academic query normalization, open-access arXiv full-text PDF upgrade, local PDF upload extraction + invalid-byte rejection, deterministic fabricated-number and inference detection (`verifier.py`).
+- **Academic Search, PDF Ingestion, SSRF & Verifier:** loopback/private IP blocking, multi-hop redirect SSRF blocking, academic query normalization, open-access arXiv full-text PDF upgrade, local PDF upload extraction + invalid-byte rejection, deterministic fabricated-number and inference detection (`verifier.py`, including Markdown table cell boundaries).
 - **Storage & Providers:** room CRUD + append-only `events.jsonl`, secret masking + live model discovery, clean empty-room initialization.

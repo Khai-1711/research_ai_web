@@ -15,7 +15,7 @@ import {
   Square,
   Users,
 } from 'lucide-react';
-import type { ChatMessage, LaneInfo, Perspective, Room } from '../types.ts';
+import type { ChatMessage, LaneInfo, LiveTurnPhase, Perspective, Room } from '../types.ts';
 import { formatLaneDisplay, getPerspectiveColorVar } from '../utils/themeAndExport.ts';
 import { MarkdownText } from './MarkdownText.tsx';
 
@@ -24,9 +24,32 @@ export interface ActiveLaneJob {
   handle: string;
   colorIndex: number;
   laneId: string;
+  modelLabel?: string;
+  phase?: LiveTurnPhase;
+  thoughtChars?: number;
+  replyChars?: number;
+  lastHeartbeatMs?: number;
   startedAtMs: number;
   status: 'queued' | 'running' | 'done' | 'error';
   roundLabel: string;
+}
+
+function formatLivePhaseText(job: ActiveLaneJob): string {
+  if (job.status === 'queued') {
+    return 'Đang chờ luồng trống theo cấu hình max_concurrency…';
+  }
+  switch (job.phase) {
+    case 'queued_lock':
+      return 'Đang chờ luồng Bridge nhả khóa phiên…';
+    case 'waiting_gemini':
+      return 'Đã gửi hồ sơ · đang chờ Google Gemini khởi tạo suy luận…';
+    case 'thinking':
+      return `Đang suy luận sâu${job.thoughtChars ? ` (~${job.thoughtChars.toLocaleString()} ký tự nháp)` : ''} · vẫn đang giữ kết nối…`;
+    case 'generating':
+      return `Đang viết phân tích${job.replyChars ? ` (đã nhận ${job.replyChars.toLocaleString()} ký tự)` : ''}…`;
+    default:
+      return `Đang phân tích và tổng hợp lập luận (${job.roundLabel})…`;
+  }
 }
 
 interface GroupFeedProps {
@@ -663,13 +686,27 @@ export function GroupFeed({
                     job.status === 'running'
                       ? Math.max(0.1, (nowMs - job.startedAtMs) / 1000).toFixed(1)
                       : 'chờ đợt';
+                  const heartbeatAgeSec =
+                    job.lastHeartbeatMs != null
+                      ? Math.max(0, Math.round((nowMs - job.lastHeartbeatMs) / 1000))
+                      : null;
                   return (
                     <div
                       key={job.perspectiveId}
                       className="rounded-xl border border-dashed border-[var(--accent)] bg-[var(--surface)] px-5 py-3.5 flex items-center justify-between gap-3"
                     >
                       <div className="min-w-0">
-                        <div className="flex items-center gap-2 text-xs">
+                        <div className="flex flex-wrap items-center gap-2 text-xs">
+                          {job.status === 'running' && (
+                            <span
+                              title={
+                                heartbeatAgeSec !== null
+                                  ? `Kết nối sống · nhịp cuối cách đây ${heartbeatAgeSec}s`
+                                  : 'Đang giữ kết nối nghiên cứu'
+                              }
+                              className="w-2 h-2 rounded-full bg-[var(--ok)] animate-pulse inline-block shrink-0"
+                            />
+                          )}
                           <span
                             className="font-semibold"
                             style={{ color: getPerspectiveColorVar(job.colorIndex) }}
@@ -689,11 +726,19 @@ export function GroupFeed({
                           <span className="font-mono-num text-[var(--ink-muted)]">
                             {formatLaneDisplay(job.laneId, laneDetails)}
                           </span>
+                          {job.modelLabel && (
+                            <>
+                              <span aria-hidden="true" className="text-[var(--ink-muted)]">
+                                ·
+                              </span>
+                              <span className="font-mono-num px-1.5 py-0.5 rounded bg-[var(--bg-subtle)] text-[var(--ink-secondary)] text-[10.5px]">
+                                {job.modelLabel}
+                              </span>
+                            </>
+                          )}
                         </div>
                         <p className="text-xs text-[var(--ink-secondary)] mt-1">
-                          {job.status === 'running'
-                            ? `Đang phân tích và tổng hợp lập luận (${job.roundLabel})…`
-                            : 'Đang chờ luồng trống theo cấu hình max_concurrency…'}
+                          {formatLivePhaseText(job)}
                         </p>
                       </div>
                       <button
@@ -721,13 +766,20 @@ export function GroupFeed({
                     <span className="text-[var(--ink-secondary)]">
                       Đang chạy:{' '}
                       {runningJobs
-                        .map(
-                          (j) =>
-                            `@${j.handle} (${j.laneId} · ${Math.max(
-                              0.1,
-                              (nowMs - j.startedAtMs) / 1000
-                            ).toFixed(0)}s)`
-                        )
+                        .map((j) => {
+                          const phaseHint =
+                            j.phase === 'thinking'
+                              ? ' · đang nghĩ'
+                              : j.phase === 'generating'
+                              ? ' · đang viết'
+                              : j.phase === 'waiting_gemini'
+                              ? ' · chờ phản hồi'
+                              : '';
+                          return `@${j.handle} (${j.laneId}${j.modelLabel ? `/${j.modelLabel}` : ''} · ${Math.max(
+                            0.1,
+                            (nowMs - j.startedAtMs) / 1000
+                          ).toFixed(0)}s${phaseHint})`;
+                        })
                         .join(', ')}
                     </span>
                     {queuedJobs.length > 0 && (

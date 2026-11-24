@@ -73,10 +73,12 @@ def test_health_accurately_counts_workers_and_detects_guest_mode(tmp_path: Path)
 def test_perspective_uses_single_user_message_reads_gateway_lane_and_retries_429(tmp_path: Path):
     attempts = {"n": 0}
     captured_payloads: list[dict] = []
+    captured_headers: list[dict[str, str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         attempts["n"] += 1
         captured_payloads.append(json.loads(request.content.decode("utf-8")))
+        captured_headers.append({k.lower(): v for k, v in request.headers.items()})
         if attempts["n"] == 1:
             return httpx.Response(429, headers={"Retry-After": "0"}, json={"error": {"code": "bridge_busy"}})
         return httpx.Response(
@@ -116,9 +118,10 @@ def test_perspective_uses_single_user_message_reads_gateway_lane_and_retries_429
     )
     assert res.status_code == 200
     assert attempts["n"] == 2  # retried 429 cleanly
-    # Verify single user message (no dropped system role!) and stream=False
+    # Verify single user message (no dropped system role!), research SSE mode & header
     sent = captured_payloads[0]
-    assert sent["stream"] is False
+    assert sent["stream"] is True
+    assert captured_headers[0].get("x-dsh-research-mode") == "1"
     assert len(sent["messages"]) == 1
     assert sent["messages"][0]["role"] == "user"
     assert "Đánh giá kiến trúc." in sent["messages"][0]["content"]
@@ -1319,3 +1322,177 @@ def test_verifier_detects_fabricated_numbers_and_distinguishes_inferences():
     assert summary["totalInvalidCitations"] == 1
     assert summary["totalNumericMatched"] == 2
     assert summary["totalNumericChecked"] == 3
+
+
+@pytest.mark.asyncio
+async def test_bridge_client_chat_stateless_streams_liveness_and_keeps_model():
+    statuses: list[dict] = []
+
+    sse_payload = (
+        b": keep-alive\n\n"
+        b': dsh-status {"phase": "waiting_gemini", "lane_id": "acc1", "model": "gemini-carbon"}\n\n'
+        b': dsh-status {"phase": "thinking", "lane_id": "acc1", "model": "gemini-carbon", "thought_chars": 420}\n\n'
+        b'data: {"choices": [{"delta": {"content": "K\\u1ebft lu\\u1eadn: "}}]}\n\n'
+        b'data: {"choices": [{"delta": {"content": "\\u0110\\u1ea1t chu\\u1ea9n [S1]."}}]}\n\n'
+        b'data: {"model": "gemini-carbon", "dsh_meta": {"actual_model": "gemini-carbon", "fallback_from": null}, "choices": [{"delta": {}, "finish_reason": "stop"}]}\n\n'
+        b"data: [DONE]\n\n"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers.get("X-DSH-Ephemeral") == "1"
+        assert request.headers.get("X-DSH-Research-Mode") == "1"
+        body = json.loads(request.content.decode("utf-8"))
+        assert body["stream"] is True
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream; charset=utf-8", "X-Gateway-Lane": "acc1"},
+            content=sse_payload,
+        )
+
+    async def on_status(ev: dict):
+        statuses.append(ev)
+
+    bridge = BridgeClient("http://bridge.test", transport=httpx.MockTransport(handler))
+    res = await bridge.chat_stateless(
+        system_instruction="Vai trò nghiên cứu.",
+        user_prompt="Kiểm tra hiệu quả [S1].",
+        model="gemini-carbon",
+        on_status=on_status,
+    )
+    assert res.text == "Kết luận: Đạt chuẩn [S1]."
+    assert res.model_used == "gemini-carbon"
+    assert res.lane_id == "acc1"
+    assert res.fallback_from is None
+    phases = [s["phase"] for s in statuses]
+    assert "waiting_gemini" in phases
+    assert "thinking" in phases
+    assert "generating" in phases
+
+
+def test_perspective_sse_endpoint_emits_status_and_result_events(tmp_path: Path):
+    sse_payload = (
+        b': dsh-status {"phase": "waiting_gemini", "lane_id": "acc2", "model": "gemini-carbon"}\n\n'
+        b': dsh-status {"phase": "thinking", "lane_id": "acc2", "model": "gemini-carbon", "thought_chars": 150}\n\n'
+        b'data: {"choices": [{"delta": {"content": "K\\u1ebft lu\\u1eadn: Khuy\\u1ebfn ngh\\u1ecb tri\\u1ec3n khai hybrid [S1]."}}]}\n\n'
+        b'data: {"model": "gemini-carbon", "dsh_meta": {"actual_model": "gemini-carbon", "fallback_from": null}, "choices": [{"delta": {}, "finish_reason": "stop"}]}\n\n'
+        b"data: [DONE]\n\n"
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream", "X-Gateway-Lane": "acc2"},
+            content=sse_payload,
+        )
+
+    bridge = BridgeClient("http://bridge.test", transport=httpx.MockTransport(handler))
+    cfg = Settings(data_dir=tmp_path / "rooms", dist_dir=tmp_path / "dist")
+    client = TestClient(create_app(cfg, bridge_client=bridge))
+
+    res = client.post(
+        "/api/ai/perspective",
+        headers={"Accept": "text/event-stream"},
+        json={
+            "perspective": {
+                "id": "p1",
+                "handle": "Kỹ_thuật",
+                "name": "Kỹ thuật",
+                "rolePrompt": "Đánh giá kiến trúc.",
+                "modelLabel": "gemini-carbon",
+            },
+            "prompt": "RAG hay Hybrid?",
+            "sources": [{"id": "S1", "origin": "arXiv", "title": "Paper 1", "excerpt": "Hybrid wins."}],
+            "round": 0,
+        },
+    )
+    assert res.status_code == 200
+    assert "text/event-stream" in res.headers["content-type"]
+    assert "event: status" in res.text
+    assert '"phase": "thinking"' in res.text
+    assert "event: result" in res.text
+    assert '"modelUsed": "gemini-carbon"' in res.text
+
+
+def test_remote_share_security_middleware_blocks_unauthed_and_host_admin_routes(tmp_path: Path):
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"lanes": []})
+
+    bridge = BridgeClient("http://bridge.test", transport=httpx.MockTransport(handler))
+    cfg = Settings(
+        data_dir=tmp_path / "rooms",
+        dist_dir=tmp_path / "dist",
+        share_token="secret-pass-42",
+    )
+    client = TestClient(create_app(cfg, bridge_client=bridge))
+
+    remote_headers = {
+        "Origin": "https://khai-1711.github.io",
+        "Cf-Connecting-Ip": "203.0.113.9",
+    }
+
+    # 1. Missing token via tunnel -> 401 with CORS header exposed
+    r_unauth = client.get("/api/rooms", headers=remote_headers)
+    assert r_unauth.status_code == 401
+    assert r_unauth.headers.get("access-control-allow-origin") in ("*", "https://khai-1711.github.io")
+
+    # 2. Valid X-Share-Token via tunnel -> rooms OK & health marks isLocalOwner=False
+    r_rooms = client.get("/api/rooms", headers={**remote_headers, "X-Share-Token": "secret-pass-42"})
+    assert r_rooms.status_code == 200
+    room_id = r_rooms.json()["rooms"][0]["id"]
+
+    r_health = client.get("/api/health", headers={**remote_headers, "X-Share-Token": "secret-pass-42"})
+    assert r_health.status_code == 200
+    h_json = r_health.json()
+    assert h_json["isLocalOwner"] is False
+    assert h_json["shareProtected"] is True
+
+    # 3. Query param share_token works for download/SSE URLs
+    r_q = client.get(f"/api/rooms/{room_id}/events.jsonl?share_token=secret-pass-42", headers=remote_headers)
+    assert r_q.status_code == 200
+
+    # 4. Host-only admin endpoints strictly 403 via tunnel even with valid token
+    r_admin = client.post(
+        "/api/lanes/acc1/login",
+        headers={**remote_headers, "X-Share-Token": "secret-pass-42"},
+    )
+    assert r_admin.status_code == 403
+
+    r_share_info = client.get(
+        "/api/share-info",
+        headers={**remote_headers, "X-Share-Token": "secret-pass-42"},
+    )
+    assert r_share_info.status_code == 403
+
+    # 5. Direct local owner request succeeds without token
+    r_local_health = client.get("/api/health")
+    assert r_local_health.status_code == 200
+    assert r_local_health.json()["isLocalOwner"] is True
+    r_local_share = client.get("/api/share-info")
+    assert r_local_share.status_code == 200
+    assert r_local_share.json()["enabled"] is True
+    assert r_local_share.json()["token"] == "secret-pass-42"
+
+
+def test_verifier_splits_markdown_table_cells_without_cross_cell_false_positives():
+    from app.verifier import verify_perspective_turn
+
+    sources = [
+        {
+            "id": "S1",
+            "origin": "Annual Report",
+            "title": "Financial Summary",
+            "contentLevel": "full_text",
+            "excerpt": "ROA reached 2.15% across the fiscal year.",
+        }
+    ]
+    md = (
+        "| Chỉ tiêu | Giá trị gốc | Đánh giá |\n"
+        "|---|---|---|\n"
+        "| ROA | 2.15% [S1] | +31.6% [Suy luận từ S1] |"
+    )
+    ver = verify_perspective_turn(md, sources)
+    assert ver["validCitations"] == ["S1"]
+    assert ver["inferredCitations"] == ["S1"]
+    assert ver["numericClaimsMatched"] == 1
+    assert ver["numericClaimsChecked"] == 1
+    assert ver["unverifiedNumbers"] == []

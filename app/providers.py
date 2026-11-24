@@ -287,6 +287,7 @@ class ProviderStore:
         model: str | None = None,
         pinned_lane_id: str | None = None,
         exclude_lanes: list[str] | set[str] | None = None,
+        on_status: Any = None,
     ) -> AdapterResult:
         prov = self.get_raw(provider_id)
         if prov is None:
@@ -303,12 +304,14 @@ class ProviderStore:
                     model=chosen_model,
                     pinned_lane_id=pinned_lane_id,
                     exclude_lanes=exclude_lanes,
+                    on_status=on_status,
                 )
             custom_bridge = BridgeClient(
                 prov["baseUrl"],
                 api_key=str(prov.get("apiKey") or ""),
                 default_model=chosen_model,
                 timeout_s=default_bridge.timeout_s,
+                idle_timeout_s=default_bridge.idle_timeout_s,
                 max_retries=default_bridge.max_retries,
             )
             return await custom_bridge.chat_stateless(
@@ -317,6 +320,7 @@ class ProviderStore:
                 model=chosen_model,
                 pinned_lane_id=pinned_lane_id,
                 exclude_lanes=exclude_lanes,
+                on_status=on_status,
             )
 
         if kind == "gemini_api":

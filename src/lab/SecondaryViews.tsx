@@ -14,6 +14,9 @@ import {
 } from 'lucide-react';
 import type { Room } from '../types.ts';
 import {
+  buildApiUrl,
+} from '../utils/api.ts';
+import {
   generateRoomMarkdown,
   getPerspectiveColorVar,
   triggerFileDownload,
@@ -555,7 +558,7 @@ export function AuditView({ room }: AuditViewProps) {
 
   const handleDownloadJsonl = () => {
     const a = document.createElement('a');
-    a.href = `/api/rooms/${encodeURIComponent(room.id)}/events.jsonl`;
+    a.href = buildApiUrl(`/api/rooms/${encodeURIComponent(room.id)}/events.jsonl`, true);
     a.download = `${room.id}-events.jsonl`;
     document.body.appendChild(a);
     a.click();
@@ -587,7 +590,7 @@ export function AuditView({ room }: AuditViewProps) {
         {/* Summary parameters */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
           {[
-            { k: 'Chế độ gọi', v: 'Stateless · stream=false' },
+            { k: 'Chế độ gọi', v: 'Stateless · SSE Liveness' },
             { k: 'Số lượt đã ghi', v: `${room.audit.length} lượt` },
             {
               k: 'Cảnh báo Fallback',

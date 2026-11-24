@@ -17,6 +17,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
 from app.bridge import BridgeCallError, BridgeClient
+from app.config import ensure_share_token_file, is_direct_local_request, resolve_active_share_token
 from app.judge import (
     MAX_JUDGE_SOURCE_EXCERPT,
     build_judge_prompt,
@@ -74,7 +75,7 @@ def build_api_router(
 
     # 1. Health, Live Models, Bridge Lanes & AI Providers
     @router.get("/health")
-    async def health():
+    async def health(request: Request):
         data = await bridge.check_health()
         custom_names = lane_name_store.load_all()
         details = []
@@ -83,7 +84,40 @@ def build_api_router(
             bridge_lbl = str(lane.get("bridgeLabel") or lid)
             details.append({**lane, "name": custom_names.get(lid) or bridge_lbl})
         data["laneDetails"] = details
+        cfg = getattr(request.app.state, "settings", None)
+        runtime_tok = getattr(request.app.state, "runtime_share_token", "")
+        active_tok = resolve_active_share_token(cfg, runtime_tok) if cfg is not None else ""
+        data["isLocalOwner"] = is_direct_local_request(request)
+        data["shareProtected"] = bool(active_tok)
         return data
+
+    @router.get("/share-info")
+    async def get_share_info(request: Request):
+        if not is_direct_local_request(request):
+            return JSONResponse(status_code=403, content={"error": "Chỉ máy chủ cục bộ mới được xem thông tin chia sẻ."})
+        cfg = getattr(request.app.state, "settings", None)
+        runtime_tok = getattr(request.app.state, "runtime_share_token", "")
+        token = resolve_active_share_token(cfg, runtime_tok) if cfg is not None else ""
+        return {
+            "enabled": bool(token),
+            "token": token,
+            "defaultPagesUrl": "https://khai-1711.github.io/research_ai_web/",
+        }
+
+    @router.post("/share-info/enable")
+    async def enable_share_info(request: Request):
+        if not is_direct_local_request(request):
+            return JSONResponse(status_code=403, content={"error": "Chỉ máy chủ cục bộ mới được bật mã chia sẻ."})
+        cfg = getattr(request.app.state, "settings", None)
+        runtime_tok = getattr(request.app.state, "runtime_share_token", "")
+        existing = resolve_active_share_token(cfg, runtime_tok) if cfg is not None else ""
+        token = existing or ensure_share_token_file()
+        request.app.state.runtime_share_token = token
+        return {
+            "enabled": True,
+            "token": token,
+            "defaultPagesUrl": "https://khai-1711.github.io/research_ai_web/",
+        }
 
     @router.patch("/lanes/{lane_id}")
     async def rename_lane(lane_id: str, request: Request):
@@ -371,6 +405,88 @@ def build_api_router(
         except Exception as exc:
             return JSONResponse(status_code=500, content={"error": str(exc)})
 
+    async def _run_with_optional_sse(request: Request, runner):
+        accept = (request.headers.get("accept") or "").lower()
+        if "text/event-stream" not in accept:
+            try:
+                status_code, payload = await runner(None)
+            except BridgeCallError as exc:
+                return JSONResponse(status_code=502, content={"error": str(exc)})
+            if status_code != 200:
+                return JSONResponse(status_code=status_code, content=payload)
+            return payload
+
+        async def _sse_stream():
+            queue: asyncio.Queue = asyncio.Queue()
+            done_ev = asyncio.Event()
+            last_phase = "waiting_gemini"
+
+            async def _on_status(st: dict[str, Any]) -> None:
+                nonlocal last_phase
+                if isinstance(st, dict) and st.get("phase"):
+                    last_phase = str(st["phase"])
+                await queue.put(("status", st))
+
+            async def _driver() -> None:
+                try:
+                    sc, pl = await runner(_on_status)
+                    await queue.put(("result", (sc, pl)))
+                except BridgeCallError as exc:
+                    await queue.put(("error", (502, {"error": str(exc)})))
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    await queue.put(("error", (500, {"error": str(exc)})))
+                finally:
+                    done_ev.set()
+
+            task = asyncio.create_task(_driver())
+            try:
+                while True:
+                    if await request.is_disconnected():
+                        task.cancel()
+                        break
+                    if done_ev.is_set() and queue.empty():
+                        break
+                    try:
+                        kind, payload = await asyncio.wait_for(queue.get(), timeout=2.5)
+                    except asyncio.TimeoutError:
+                        if done_ev.is_set() and queue.empty():
+                            break
+                        hb = {"phase": last_phase, "heartbeat": True}
+                        yield f"event: status\ndata: {json.dumps(hb, ensure_ascii=False)}\n\n"
+                        continue
+
+                    if kind == "status":
+                        yield f"event: status\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    elif kind == "result":
+                        sc, pl = payload
+                        if sc == 200:
+                            yield f"event: result\ndata: {json.dumps(pl, ensure_ascii=False)}\n\n"
+                        else:
+                            err_pl = {"status": sc, **(pl if isinstance(pl, dict) else {"error": str(pl)})}
+                            yield f"event: error\ndata: {json.dumps(err_pl, ensure_ascii=False)}\n\n"
+                        break
+                    elif kind == "error":
+                        sc, pl = payload
+                        err_pl = {"status": sc, **(pl if isinstance(pl, dict) else {"error": str(pl)})}
+                        yield f"event: error\ndata: {json.dumps(err_pl, ensure_ascii=False)}\n\n"
+                        break
+            finally:
+                if not task.done():
+                    task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+        return StreamingResponse(
+            _sse_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
     # 5. Stateless single-perspective AI turn via dsh-gemini-bridge + Verifier
     @router.post("/ai/perspective")
     async def run_perspective(request: Request):
@@ -403,7 +519,8 @@ def build_api_router(
         pinned_lane_id = (
             str(perspective.get("pinnedLaneId") or body.get("pinnedLaneId") or "").strip() or None
         )
-        try:
+
+        async def _runner(on_status):
             result = await prov_store.complete(
                 default_bridge=bridge,
                 provider_id=perspective.get("providerId"),
@@ -411,42 +528,41 @@ def build_api_router(
                 user_prompt=user_prompt,
                 model=perspective.get("modelLabel"),
                 pinned_lane_id=pinned_lane_id,
+                on_status=on_status,
             )
-        except BridgeCallError as exc:
-            return JSONResponse(status_code=502, content={"error": str(exc)})
+            elapsed_sec = round(time.monotonic() - started, 1)
+            valid_ids = {str(s.get("id")) for s in sources if isinstance(s, dict) and s.get("id")}
+            verification = verify_perspective_turn(result.text, sources)
+            return 200, {
+                "content": result.text,
+                "summary1Line": extract_summary_1line(result.text),
+                "citedSourceIds": extract_cited_sources(result.text, valid_ids),
+                "verification": verification,
+                "elapsedSec": elapsed_sec,
+                "modelUsed": result.model_used,
+                "fallbackFrom": result.fallback_from,
+                "laneId": result.lane_id if result.lane_id != "bridge" else (requested_lane or "bridge"),
+                "rawPrompt": result.raw_prompt,
+            }
 
-        elapsed_sec = round(time.monotonic() - started, 1)
-        valid_ids = {str(s.get("id")) for s in sources if isinstance(s, dict) and s.get("id")}
-        verification = verify_perspective_turn(result.text, sources)
-        return {
-            "content": result.text,
-            "summary1Line": extract_summary_1line(result.text),
-            "citedSourceIds": extract_cited_sources(result.text, valid_ids),
-            "verification": verification,
-            "elapsedSec": elapsed_sec,
-            "modelUsed": result.model_used,
-            "fallbackFrom": result.fallback_from,
-            "laneId": result.lane_id if result.lane_id != "bridge" else (requested_lane or "bridge"),
-            "rawPrompt": result.raw_prompt,
-        }
+        return await _run_with_optional_sse(request, _runner)
 
     # 6. Judge & Synthesizer (Report + Dynamic Rubric + Living Outline + Cross-Account Exclusion)
     @router.post("/ai/synthesize")
     async def run_synthesize(request: Request):
         started = time.monotonic()
         body = await request.json()
-        try:
-            status_code, payload = await synthesize_judge_report(
+
+        async def _runner(on_status):
+            return await synthesize_judge_report(
                 body=body,
                 bridge=bridge,
                 prov_store=prov_store,
                 started_monotonic=started,
                 time_fn=time.monotonic,
+                on_status=on_status,
             )
-        except BridgeCallError as exc:
-            return JSONResponse(status_code=502, content={"error": str(exc)})
-        if status_code != 200:
-            return JSONResponse(status_code=status_code, content=payload)
-        return payload
+
+        return await _run_with_optional_sse(request, _runner)
 
     return router

@@ -3,9 +3,12 @@ import {
   AlertTriangle,
   Check,
   CheckCircle2,
+  Copy,
   Cpu,
   Edit3,
+  Globe,
   KeyRound,
+  Link2,
   LogIn,
   Plus,
   RefreshCw,
@@ -26,12 +29,18 @@ import type {
   Perspective,
 } from '../types.ts';
 import {
+  clearRemoteConfig,
   createLaneApi,
   createProviderApi,
   deleteProviderApi,
+  enableShareTokenApi,
   finishLoginLaneApi,
+  fetchShareInfoApi,
+  getRemoteConfig,
+  isStaticPagesHost,
   loginLaneApi,
   renameLaneApi,
+  saveRemoteConfig,
   syncAllLanesApi,
   syncLaneApi,
   testProviderApi,
@@ -129,6 +138,22 @@ export function SettingsDrawer({
   const [assignModel, setAssignModel] = useState('gemini-neon');
   const [vaultBusyKey, setVaultBusyKey] = useState<string | null>(null);
 
+  const isRemoteGuest =
+    health?.isLocalOwner === false || (health === null && isStaticPagesHost());
+  const [shareInfo, setShareInfo] = useState<{
+    enabled: boolean;
+    token: string;
+    defaultPagesUrl: string;
+  } | null>(null);
+  const [shareBusy, setShareBusy] = useState(false);
+  const [shareTunnelUrl, setShareTunnelUrl] = useState(() => getRemoteConfig().apiBase);
+  const [sharePagesUrl, setSharePagesUrl] = useState(
+    'https://khai-1711.github.io/research_ai_web/'
+  );
+  const [remoteTokenDraft, setRemoteTokenDraft] = useState(() => getRemoteConfig().shareToken);
+  const [shareMsg, setShareMsg] = useState<string | null>(null);
+  const [copiedInvite, setCopiedInvite] = useState(false);
+
   const rawLaneDetails: LaneInfo[] = health?.laneDetails?.length
     ? health.laneDetails
     : (health?.lanes || []).map((id) => ({
@@ -152,7 +177,76 @@ export function SettingsDrawer({
     return () => window.clearInterval(timer);
   }, [open, hasPendingVaultLogin, onRefreshProvidersAndModels]);
 
+  useEffect(() => {
+    if (!open || isRemoteGuest) return;
+    let alive = true;
+    fetchShareInfoApi()
+      .then((info) => {
+        if (!alive) return;
+        setShareInfo(info);
+        if (info.defaultPagesUrl) setSharePagesUrl(info.defaultPagesUrl);
+      })
+      .catch(() => {
+        // Bỏ qua nếu đang xem từ xa hoặc endpoint chưa bật
+      });
+    return () => {
+      alive = false;
+    };
+  }, [open, isRemoteGuest]);
+
   if (!open) return null;
+
+  const cleanPagesUrl = (
+    sharePagesUrl ||
+    shareInfo?.defaultPagesUrl ||
+    'https://khai-1711.github.io/research_ai_web/'
+  ).trim();
+  const cleanTunnelUrl = shareTunnelUrl.trim().replace(/\/+$/, '');
+  const builtInviteLink =
+    cleanTunnelUrl && shareInfo?.token
+      ? `${cleanPagesUrl}${cleanPagesUrl.includes('?') ? '&' : '?'}api=${encodeURIComponent(
+          cleanTunnelUrl
+        )}#token=${encodeURIComponent(shareInfo.token)}`
+      : '';
+
+  const handleEnableShareToken = async () => {
+    setShareBusy(true);
+    setShareMsg(null);
+    try {
+      const info = await enableShareTokenApi();
+      setShareInfo(info);
+      if (info.defaultPagesUrl) setSharePagesUrl(info.defaultPagesUrl);
+      setShareMsg('Đã kích hoạt mã truy cập từ xa (.share_token).');
+      await onRefreshProvidersAndModels();
+    } catch (err) {
+      setShareMsg(err instanceof Error ? err.message : 'Không bật được mã chia sẻ.');
+    } finally {
+      setShareBusy(false);
+    }
+  };
+
+  const handleCopyInviteLink = async () => {
+    if (!builtInviteLink) return;
+    try {
+      await navigator.clipboard.writeText(builtInviteLink);
+      setCopiedInvite(true);
+      window.setTimeout(() => setCopiedInvite(false), 2000);
+    } catch {
+      setShareMsg('Không tự copy được, hãy chọn ô Link mời để copy tay.');
+    }
+  };
+
+  const handleSaveRemoteEndpoint = () => {
+    const saved = saveRemoteConfig(shareTunnelUrl, remoteTokenDraft);
+    setShareTunnelUrl(saved.apiBase);
+    setRemoteTokenDraft(saved.shareToken);
+    window.location.reload();
+  };
+
+  const handleClearRemoteEndpoint = () => {
+    clearRemoteConfig();
+    window.location.reload();
+  };
 
   const laneDetails = rawLaneDetails;
 
@@ -472,6 +566,131 @@ export function SettingsDrawer({
         </div>
 
         <div className="flex-1 overflow-y-auto p-5 space-y-6">
+          {/* 0. GitHub Pages & Remote Tunnel Sharing */}
+          <section className="space-y-2.5 p-3.5 rounded-xl bg-[var(--bg)] border border-[var(--border)]">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-xs font-semibold text-[var(--ink)]">
+                <Globe className="w-4 h-4 text-[var(--accent)]" />
+                Chia sẻ qua GitHub Pages / Kết nối từ xa
+              </div>
+              {isRemoteGuest ? (
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-[var(--accent-soft)] text-[var(--accent)]">
+                  Khách kết nối từ xa
+                </span>
+              ) : (
+                <span
+                  className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                    shareInfo?.enabled
+                      ? 'bg-[var(--ok-soft)] text-[var(--ok)]'
+                      : 'bg-[var(--bg-subtle)] text-[var(--ink-muted)]'
+                  }`}
+                >
+                  {shareInfo?.enabled ? 'Đã bật Passcode' : 'Chỉ dùng nội bộ'}
+                </span>
+              )}
+            </div>
+
+            {!isRemoteGuest ? (
+              <div className="space-y-2.5">
+                <p className="text-[11px] text-[var(--ink-muted)] leading-relaxed">
+                  Chạy <code className="px-1 py-0.5 rounded bg-[var(--surface)]">python start.py share</code> trong thư mục gốc để mở HTTPS Tunnel rồi dán URL Tunnel vào dưới đây để tạo Link mời 1 chạm cho 1–2 bạn dùng chung backend.
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={shareBusy}
+                    onClick={handleEnableShareToken}
+                    className="px-2.5 py-1.5 rounded-lg bg-[var(--accent)] text-[var(--accent-ink)] text-[11px] font-semibold hover:bg-[var(--accent-hover)] disabled:opacity-50 inline-flex items-center gap-1 cursor-pointer"
+                  >
+                    <Link2 className="w-3 h-3" />
+                    {shareBusy
+                      ? 'Đang tạo mã...'
+                      : shareInfo?.enabled
+                      ? 'Tạo lại / Hiện Passcode'
+                      : 'Bật Passcode chia sẻ'}
+                  </button>
+                  {shareInfo?.enabled && shareInfo.token && (
+                    <span className="font-mono-num text-[11px] px-2 py-1 rounded bg-[var(--surface)] border border-[var(--border)] text-[var(--ink)]">
+                      Passcode: <strong>{shareInfo.token}</strong>
+                    </span>
+                  )}
+                </div>
+                <div className="grid grid-cols-1 gap-2">
+                  <input
+                    type="text"
+                    value={shareTunnelUrl}
+                    onChange={(e) => setShareTunnelUrl(e.target.value)}
+                    placeholder="URL Tunnel HTTPS (vd: https://xxxx.trycloudflare.com)"
+                    className="w-full px-2.5 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] text-xs text-[var(--ink)] focus:outline-none focus:border-[var(--accent)]"
+                  />
+                  <input
+                    type="text"
+                    value={sharePagesUrl}
+                    onChange={(e) => setSharePagesUrl(e.target.value)}
+                    placeholder="URL GitHub Pages (vd: https://khai-1711.github.io/research_ai_web/)"
+                    className="w-full px-2.5 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[11px] text-[var(--ink-secondary)] focus:outline-none focus:border-[var(--accent)]"
+                  />
+                </div>
+                {builtInviteLink && (
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="text"
+                      readOnly
+                      value={builtInviteLink}
+                      onFocus={(e) => e.currentTarget.select()}
+                      className="flex-1 px-2.5 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[11px] font-mono-num text-[var(--ink)]"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleCopyInviteLink}
+                      className="px-2.5 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[11px] font-medium text-[var(--ink)] hover:border-[var(--accent)] inline-flex items-center gap-1 cursor-pointer shrink-0"
+                    >
+                      <Copy className="w-3 h-3" />
+                      {copiedInvite ? 'Đã chép' : 'Copy Link'}
+                    </button>
+                  </div>
+                )}
+                {shareMsg && <p className="text-[11px] text-[var(--ok)]">{shareMsg}</p>}
+              </div>
+            ) : (
+              <div className="space-y-2.5">
+                <p className="text-[11px] text-[var(--ink-muted)] leading-relaxed">
+                  Đang dùng qua kết nối chia sẻ — các thao tác quản trị máy chủ (đăng nhập trình duyệt, thêm acc, thêm/xóa API key) đã khóa an toàn.
+                </p>
+                <input
+                  type="text"
+                  value={shareTunnelUrl}
+                  onChange={(e) => setShareTunnelUrl(e.target.value)}
+                  placeholder="Link mời hoặc URL Tunnel HTTPS"
+                  className="w-full px-2.5 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] text-xs text-[var(--ink)] focus:outline-none focus:border-[var(--accent)]"
+                />
+                <input
+                  type="password"
+                  value={remoteTokenDraft}
+                  onChange={(e) => setRemoteTokenDraft(e.target.value)}
+                  placeholder="Passcode truy cập"
+                  className="w-full px-2.5 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] text-xs text-[var(--ink)] focus:outline-none focus:border-[var(--accent)]"
+                />
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleSaveRemoteEndpoint}
+                    className="px-3 py-1.5 rounded-lg bg-[var(--accent)] text-[var(--accent-ink)] text-[11px] font-semibold hover:bg-[var(--accent-hover)] cursor-pointer"
+                  >
+                    Lưu & Tải lại
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleClearRemoteEndpoint}
+                    className="px-3 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[11px] text-[var(--ink-secondary)] hover:text-[var(--danger)] cursor-pointer"
+                  >
+                    Ngắt kết nối
+                  </button>
+                </div>
+              </div>
+            )}
+          </section>
+
           {/* 1. AI Providers (Bridge + API Key) */}
           <section className="space-y-3">
             <div className="flex items-center justify-between gap-2">
@@ -488,17 +707,19 @@ export function SettingsDrawer({
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
                 </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowAddForm((v) => !v);
-                    setFormMsg(null);
-                  }}
-                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-[var(--accent)] text-[var(--accent-ink)] text-xs font-semibold hover:bg-[var(--accent-hover)] cursor-pointer"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  Thêm AI
-                </button>
+                {!isRemoteGuest && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowAddForm((v) => !v);
+                      setFormMsg(null);
+                    }}
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-[var(--accent)] text-[var(--accent-ink)] text-xs font-semibold hover:bg-[var(--accent-hover)] cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    Thêm AI
+                  </button>
+                )}
               </div>
             </div>
 
@@ -692,7 +913,7 @@ export function SettingsDrawer({
                         >
                           {testingId === p.id ? 'Đang thử...' : 'Test'}
                         </button>
-                        {!p.builtin && (
+                        {!isRemoteGuest && !p.builtin && (
                           <button
                             type="button"
                             onClick={() => handleDelete(p.id)}
@@ -721,28 +942,30 @@ export function SettingsDrawer({
                           <div className="text-[11px] font-medium text-[var(--ink-secondary)]">
                             Từng tài khoản Bridge ({health?.cookieSyncBrowser ? `CDP: ${health.cookieSyncBrowser}` : 'Profile Vault'})
                           </div>
-                          <div className="flex items-center gap-1">
-                            <button
-                              type="button"
-                              disabled={vaultBusyKey !== null}
-                              onClick={handleSyncAllLanes}
-                              title="Sync ngầm tất cả tài khoản đã từng đăng nhập (0 tab mở)"
-                              className="px-2 py-0.5 rounded border border-[var(--border)] bg-[var(--surface)] text-[10.5px] text-[var(--ink-secondary)] hover:text-[var(--ink)] hover:border-[var(--accent)] inline-flex items-center gap-1 disabled:opacity-50 cursor-pointer"
-                            >
-                              <RefreshCw className={`w-2.5 h-2.5 ${vaultBusyKey === 'sync-all' ? 'animate-spin' : ''}`} />
-                              {vaultBusyKey === 'sync-all' ? 'Đang sync...' : 'Sync tất cả'}
-                            </button>
-                            <button
-                              type="button"
-                              disabled={vaultBusyKey !== null}
-                              onClick={handleCreateLane}
-                              title="Tạo thêm luồng acc mới (.env.accN)"
-                              className="px-2 py-0.5 rounded bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent)] hover:text-[var(--accent-ink)] text-[10.5px] font-semibold inline-flex items-center gap-0.5 disabled:opacity-50 cursor-pointer"
-                            >
-                              <Plus className="w-2.5 h-2.5" />
-                              {vaultBusyKey === 'create-lane' ? 'Đang tạo...' : 'Thêm acc'}
-                            </button>
-                          </div>
+                          {!isRemoteGuest && (
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                disabled={vaultBusyKey !== null}
+                                onClick={handleSyncAllLanes}
+                                title="Sync ngầm tất cả tài khoản đã từng đăng nhập (0 tab mở)"
+                                className="px-2 py-0.5 rounded border border-[var(--border)] bg-[var(--surface)] text-[10.5px] text-[var(--ink-secondary)] hover:text-[var(--ink)] hover:border-[var(--accent)] inline-flex items-center gap-1 disabled:opacity-50 cursor-pointer"
+                              >
+                                <RefreshCw className={`w-2.5 h-2.5 ${vaultBusyKey === 'sync-all' ? 'animate-spin' : ''}`} />
+                                {vaultBusyKey === 'sync-all' ? 'Đang sync...' : 'Sync tất cả'}
+                              </button>
+                              <button
+                                type="button"
+                                disabled={vaultBusyKey !== null}
+                                onClick={handleCreateLane}
+                                title="Tạo thêm luồng acc mới (.env.accN)"
+                                className="px-2 py-0.5 rounded bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent)] hover:text-[var(--accent-ink)] text-[10.5px] font-semibold inline-flex items-center gap-0.5 disabled:opacity-50 cursor-pointer"
+                              >
+                                <Plus className="w-2.5 h-2.5" />
+                                {vaultBusyKey === 'create-lane' ? 'Đang tạo...' : 'Thêm acc'}
+                              </button>
+                            </div>
+                          )}
                         </div>
                         {laneDetails.map((lane) => {
                           const isRenaming = renamingLaneId === lane.id;
@@ -798,22 +1021,24 @@ export function SettingsDrawer({
                                 </div>
 
                                 <div className="flex items-center gap-1 shrink-0">
-                                  <button
-                                    type="button"
-                                    title="Đặt tên gợi nhớ cho tài khoản này"
-                                    onClick={() => {
-                                      if (isRenaming) {
-                                        setRenamingLaneId(null);
-                                      } else {
-                                        setRenamingLaneId(lane.id);
-                                        setRenameDraft(lane.name === lane.bridgeLabel ? '' : lane.name);
-                                      }
-                                    }}
-                                    className="px-2 py-1 rounded-md border border-[var(--border)] bg-[var(--bg)] text-[11px] text-[var(--ink-secondary)] hover:text-[var(--ink)] hover:border-[var(--accent)] inline-flex items-center gap-1 cursor-pointer"
-                                  >
-                                    <Edit3 className="w-3 h-3" />
-                                    Tên
-                                  </button>
+                                  {!isRemoteGuest && (
+                                    <button
+                                      type="button"
+                                      title="Đặt tên gợi nhớ cho tài khoản này"
+                                      onClick={() => {
+                                        if (isRenaming) {
+                                          setRenamingLaneId(null);
+                                        } else {
+                                          setRenamingLaneId(lane.id);
+                                          setRenameDraft(lane.name === lane.bridgeLabel ? '' : lane.name);
+                                        }
+                                      }}
+                                      className="px-2 py-1 rounded-md border border-[var(--border)] bg-[var(--bg)] text-[11px] text-[var(--ink-secondary)] hover:text-[var(--ink)] hover:border-[var(--accent)] inline-flex items-center gap-1 cursor-pointer"
+                                    >
+                                      <Edit3 className="w-3 h-3" />
+                                      Tên
+                                    </button>
+                                  )}
                                   <button
                                     type="button"
                                     disabled={testingId === laneTestKey}
@@ -839,58 +1064,64 @@ export function SettingsDrawer({
                               </div>
 
                               {/* Profile Vault Login / Sync controls */}
-                              <div className="flex flex-wrap items-center gap-1.5">
-                                {lane.loginOpen ? (
-                                  <button
-                                    type="button"
-                                    disabled={isLaneBusy}
-                                    onClick={() => handleFinishLaneLogin(lane)}
-                                    className="px-2.5 py-1 rounded-md bg-[var(--ok)] text-white text-[11px] font-semibold inline-flex items-center gap-1 disabled:opacity-50 cursor-pointer"
-                                  >
-                                    <Check className="w-3 h-3" />
-                                    {vaultBusyKey === `finish::${lane.id}` ? 'Đang lấy cookie...' : 'Xong & Sync'}
-                                  </button>
-                                ) : (
-                                  <>
+                              {!isRemoteGuest ? (
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  {lane.loginOpen ? (
                                     <button
                                       type="button"
-                                      disabled={vaultBusyKey !== null}
-                                      onClick={() => handleLaneLogin(lane)}
-                                      title="Mở trình duyệt thật để đăng nhập 1 lần (qua 2FA/Passkey)"
-                                      className={`px-2.5 py-1 rounded-md text-[11px] font-medium inline-flex items-center gap-1 disabled:opacity-50 cursor-pointer ${
-                                        !isReady || hasDup
-                                          ? 'bg-[var(--accent)] text-[var(--accent-ink)] hover:bg-[var(--accent-hover)]'
-                                          : 'border border-[var(--border)] bg-[var(--bg)] text-[var(--ink-secondary)] hover:text-[var(--ink)] hover:border-[var(--accent)]'
-                                      }`}
+                                      disabled={isLaneBusy}
+                                      onClick={() => handleFinishLaneLogin(lane)}
+                                      className="px-2.5 py-1 rounded-md bg-[var(--ok)] text-white text-[11px] font-semibold inline-flex items-center gap-1 disabled:opacity-50 cursor-pointer"
                                     >
-                                      <LogIn className="w-3 h-3" />
-                                      {vaultBusyKey === `login::${lane.id}`
-                                        ? 'Đang mở...'
-                                        : isReady && !hasDup
-                                        ? 'Đổi acc'
-                                        : hasDup
-                                        ? 'Đổi acc riêng'
-                                        : 'Đăng nhập 1 lần'}
+                                      <Check className="w-3 h-3" />
+                                      {vaultBusyKey === `finish::${lane.id}` ? 'Đang lấy cookie...' : 'Xong & Sync'}
                                     </button>
-                                    {(lane.hasProfileData || isReady) && (
+                                  ) : (
+                                    <>
                                       <button
                                         type="button"
-                                        disabled={vaultBusyKey !== null || !lane.hasProfileData}
-                                        onClick={() => handleSyncLane(lane)}
-                                        title={
-                                          lane.hasProfileData
-                                            ? 'Tự làm mới cookie ngầm (~3-5s, 0 tab mở)'
-                                            : 'Hãy bấm Đăng nhập 1 lần trước để tạo Profile Vault trên đĩa'
-                                        }
-                                        className="px-2.5 py-1 rounded-md border border-[var(--border)] bg-[var(--bg)] text-[11px] text-[var(--ink-secondary)] hover:text-[var(--ink)] hover:border-[var(--accent)] inline-flex items-center gap-1 disabled:opacity-50 cursor-pointer"
+                                        disabled={vaultBusyKey !== null}
+                                        onClick={() => handleLaneLogin(lane)}
+                                        title="Mở trình duyệt thật để đăng nhập 1 lần (qua 2FA/Passkey)"
+                                        className={`px-2.5 py-1 rounded-md text-[11px] font-medium inline-flex items-center gap-1 disabled:opacity-50 cursor-pointer ${
+                                          !isReady || hasDup
+                                            ? 'bg-[var(--accent)] text-[var(--accent-ink)] hover:bg-[var(--accent-hover)]'
+                                            : 'border border-[var(--border)] bg-[var(--bg)] text-[var(--ink-secondary)] hover:text-[var(--ink)] hover:border-[var(--accent)]'
+                                        }`}
                                       >
-                                        <Zap className="w-3 h-3 text-[var(--accent)]" />
-                                        {vaultBusyKey === `sync::${lane.id}` ? 'Đang sync...' : 'Sync ngầm'}
+                                        <LogIn className="w-3 h-3" />
+                                        {vaultBusyKey === `login::${lane.id}`
+                                          ? 'Đang mở...'
+                                          : isReady && !hasDup
+                                          ? 'Đổi acc'
+                                          : hasDup
+                                          ? 'Đổi acc riêng'
+                                          : 'Đăng nhập 1 lần'}
                                       </button>
-                                    )}
-                                  </>
-                                )}
-                              </div>
+                                      {(lane.hasProfileData || isReady) && (
+                                        <button
+                                          type="button"
+                                          disabled={vaultBusyKey !== null || !lane.hasProfileData}
+                                          onClick={() => handleSyncLane(lane)}
+                                          title={
+                                            lane.hasProfileData
+                                              ? 'Tự làm mới cookie ngầm (~3-5s, 0 tab mở)'
+                                              : 'Hãy bấm Đăng nhập 1 lần trước để tạo Profile Vault trên đĩa'
+                                          }
+                                          className="px-2.5 py-1 rounded-md border border-[var(--border)] bg-[var(--bg)] text-[11px] text-[var(--ink-secondary)] hover:text-[var(--ink)] hover:border-[var(--accent)] inline-flex items-center gap-1 disabled:opacity-50 cursor-pointer"
+                                        >
+                                          <Zap className="w-3 h-3 text-[var(--accent)]" />
+                                          {vaultBusyKey === `sync::${lane.id}` ? 'Đang sync...' : 'Sync ngầm'}
+                                        </button>
+                                      )}
+                                    </>
+                                  )}
+                                </div>
+                              ) : (
+                                <p className="text-[10.5px] text-[var(--ink-muted)] italic">
+                                  Chỉ chủ máy mới có thể đăng nhập hoặc sync cookie trình duyệt.
+                                </p>
+                              )}
 
                               {hasDup && (
                                 <div className="text-[11px] px-2 py-1.5 rounded-md bg-[var(--warn-soft)] text-[var(--warn)] flex items-start gap-1.5 border border-[var(--warn)]/30">
