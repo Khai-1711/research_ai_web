@@ -2,6 +2,14 @@ import React, { useMemo, useRef, useState } from 'react';
 import { Maximize2, Minus, Plus, Shield } from 'lucide-react';
 import type { FlowActor, FlowEvent, FlowInputEdge } from '../types.ts';
 import { getPerspectiveColorVar } from '../utils/themeAndExport.ts';
+import {
+  localizeFlowActorName,
+  localizeFlowStageLabel,
+  localizeHandle,
+  translate,
+  type UiLanguage,
+  useI18n,
+} from '../utils/i18n.tsx';
 
 export interface GraphNode {
   id: string;
@@ -41,7 +49,7 @@ export interface FlowGraphModel {
   stages: Array<{ index: number; label: string; nodeIds: string[] }>;
 }
 
-export function buildGraphFromEvents(events: FlowEvent[]): FlowGraphModel {
+export function buildGraphFromEvents(events: FlowEvent[], lang: UiLanguage = 'vi'): FlowGraphModel {
   const nodeMap = new Map<string, GraphNode>();
 
   for (const ev of events) {
@@ -51,19 +59,21 @@ export function buildGraphFromEvents(events: FlowEvent[]): FlowGraphModel {
     // Seed disabled participants from run_started so user immediately sees who is excluded!
     if (ev.event_type === 'run_started' && p.participants) {
       const targetStage = p.pattern === 'research' ? 2 : 1;
-      const targetLabel = p.pattern === 'debate' ? 'Vòng 0 · Độc lập' : 'Hội đồng N AI';
+      const targetLabel =
+        p.pattern === 'debate' ? translate(lang, 'flowRound0Debate') : translate(lang, 'flowCouncilStage');
       for (const part of p.participants) {
         if (!part.enabled) {
           const disabledId = `disabled_${part.id}`;
           if (!nodeMap.has(disabledId)) {
+            const displayHandle = localizeHandle(part.handle || part.name, lang);
             nodeMap.set(disabledId, {
               id: disabledId,
               stageIndex: targetStage,
               stageLabel: targetLabel,
-              actor: part,
+              actor: { ...part, name: localizeFlowActorName(part, lang) },
               status: 'disabled',
-              summary1Line: 'Tạm tắt — không nhận prompt ở lượt này',
-              content: `@${part.handle || part.name} đang tạm tắt ở lượt chạy này nên không có đường dữ liệu nào nối vào.`,
+              summary1Line: translate(lang, 'flowDisabledSummary'),
+              content: translate(lang, 'flowDisabledContent', { handle: displayHandle }),
               inputs: [],
               rawEvents: [ev],
             });
@@ -84,11 +94,17 @@ export function buildGraphFromEvents(events: FlowEvent[]): FlowGraphModel {
         ? 'failed'
         : existing?.status ?? 'running';
 
+    const rawStage = p.stage_label || existing?.stageLabel;
+    const localizedStage = rawStage
+      ? localizeFlowStageLabel(rawStage, lang)
+      : translate(lang, 'flowStageFallback', { idx: p.stage_index });
+    const rawActor = p.actor || existing?.actor;
+
     const merged: GraphNode = {
       id: p.node_id,
       stageIndex: p.stage_index,
-      stageLabel: p.stage_label || existing?.stageLabel || `Chặng ${p.stage_index}`,
-      actor: p.actor || existing?.actor,
+      stageLabel: localizedStage,
+      actor: rawActor ? { ...rawActor, name: localizeFlowActorName(rawActor, lang) } : rawActor,
       status: ev.event_type === 'node_warning' ? existing?.status ?? 'running' : statusFromEvent,
       summary1Line: p.summary_1line || existing?.summary1Line || '',
       content: p.content || existing?.content || '',
@@ -178,6 +194,7 @@ export function FlowCanvasSvg({
   onSelectEdge,
   isLivePlaying,
 }: FlowCanvasSvgProps) {
+  const { lang, t } = useI18n();
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
@@ -447,7 +464,7 @@ export function FlowCanvasSvg({
         <button
           type="button"
           onClick={() => setZoom((z) => Math.max(0.5, Number((z - 0.15).toFixed(2))))}
-          title="Thu nhỏ"
+          title={t('canvasZoomOut')}
           className="p-1.5 rounded-lg text-[var(--ink-secondary)] hover:bg-[var(--bg-subtle)] hover:text-[var(--ink)] cursor-pointer"
         >
           <Minus className="w-3.5 h-3.5" />
@@ -458,7 +475,7 @@ export function FlowCanvasSvg({
         <button
           type="button"
           onClick={() => setZoom((z) => Math.min(1.8, Number((z + 0.15).toFixed(2))))}
-          title="Phóng to"
+          title={t('canvasZoomIn')}
           className="p-1.5 rounded-lg text-[var(--ink-secondary)] hover:bg-[var(--bg-subtle)] hover:text-[var(--ink)] cursor-pointer"
         >
           <Plus className="w-3.5 h-3.5" />
@@ -467,11 +484,11 @@ export function FlowCanvasSvg({
         <button
           type="button"
           onClick={resetView}
-          title="Căn vừa màn hình"
+          title={t('canvasFitScreenTitle')}
           className="px-2 py-1 rounded-lg text-[11.5px] font-medium text-[var(--ink-secondary)] hover:bg-[var(--bg-subtle)] hover:text-[var(--ink)] inline-flex items-center gap-1 cursor-pointer"
         >
           <Maximize2 className="w-3 h-3" />
-          Vừa màn hình
+          {t('canvasFitScreenBtn')}
         </button>
       </div>
 
@@ -480,10 +497,10 @@ export function FlowCanvasSvg({
         <div className="w-full h-full flex items-center justify-center p-8 relative z-10">
           <div className="max-w-md text-center p-6 rounded-2xl border border-dashed border-[var(--border-strong)] bg-[var(--surface)]/85 space-y-2">
             <p className="font-display text-base font-semibold text-[var(--ink)]">
-              Chưa có luồng dữ liệu trong phòng này
+              {t('canvasEmptyTitle')}
             </p>
             <p className="text-xs text-[var(--ink-secondary)] leading-relaxed">
-              Hãy gửi câu hỏi trong Phòng Chat (hoặc chọn phòng đã có hội thoại ở thanh trên) để xem sơ đồ luồng xử lý thực tế theo thời gian thực.
+              {t('canvasEmptyHint')}
             </p>
           </div>
         </div>
@@ -540,7 +557,7 @@ export function FlowCanvasSvg({
                   fontWeight="600"
                   letterSpacing="0.04em"
                 >
-                  CHẶNG {idx} · {stage.label.toUpperCase()}
+                  {t('canvasStagePrefix', { idx, label: stage.label.toUpperCase() })}
                 </text>
                 <line
                   x1={x + 12}
@@ -591,7 +608,7 @@ export function FlowCanvasSvg({
                       fontWeight="600"
                       fill="var(--accent)"
                     >
-                      Ẩn danh
+                      {t('canvasMaskedBadge')}
                     </text>
                   </g>
                 )}
@@ -732,16 +749,16 @@ export function FlowCanvasSvg({
                 ? 'var(--border)'
                 : 'var(--border-strong)';
 
-              const titleText = node.actor.handle ? `@${node.actor.handle}` : node.actor.name;
+              const titleText = node.actor.handle ? `@${localizeHandle(node.actor.handle, lang)}` : node.actor.name;
               const statusTag = isDisabled
-                ? 'Tạm tắt'
+                ? t('canvasStatusDisabled')
                 : isRunning
-                ? `Đang chạy · ${node.elapsedSec ? `${node.elapsedSec.toFixed(1)}s` : '…'}`
+                ? t('canvasStatusRunning', { time: node.elapsedSec ? `${node.elapsedSec.toFixed(1)}s` : '…' })
                 : node.status === 'failed'
-                ? 'Lỗi'
+                ? t('canvasStatusFailed')
                 : node.elapsedSec !== undefined
                 ? `${node.elapsedSec.toFixed(1)}s`
-                : 'Xong';
+                : t('canvasStatusDone');
 
               return (
                 <g
@@ -829,7 +846,7 @@ export function FlowCanvasSvg({
                       }`}
                     >
                       {node.summary1Line ||
-                        (isRunning ? 'Đang xử lý lập luận…' : 'Đang chờ đầu vào…')}
+                        (isRunning ? t('canvasBodyRunning') : t('canvasBodyWaiting'))}
                     </div>
                   </foreignObject>
                 </g>
@@ -846,15 +863,15 @@ export function FlowCanvasSvg({
       >
         <span className="inline-flex items-center gap-1.5">
           <span className="w-2.5 h-2.5 rounded-full bg-[var(--accent)]" />
-          Hạt sáng đang truyền
+          {t('canvasLegendParticle')}
         </span>
         <span className="inline-flex items-center gap-1.5">
           <span className="w-3.5 h-2.5 rounded border border-dashed border-[var(--accent)]" />
-          Đang xử lý
+          {t('canvasLegendRunning')}
         </span>
         <span className="inline-flex items-center gap-1.5">
           <span className="w-2.5 h-2.5 rounded-full bg-[var(--ok)]" />
-          Hoàn tất
+          {t('canvasLegendDone')}
         </span>
         <span className="inline-flex items-center gap-1.5">
           <span className="w-2.5 h-2.5 rounded-full bg-[var(--warn)]" />
@@ -862,7 +879,7 @@ export function FlowCanvasSvg({
         </span>
         <span className="inline-flex items-center gap-1.5">
           <Shield className="w-3 h-3 text-[var(--accent)]" />
-          Ẩn danh vào Trọng tài
+          {t('canvasLegendMasked')}
         </span>
       </div>
     </div>

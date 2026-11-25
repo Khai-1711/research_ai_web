@@ -27,6 +27,61 @@ export interface SourceItem {
   charCount?: number;
   verified: boolean;
   addedAt: string;
+  /** Loại nguồn để cân trọng số bằng chứng (preprint ≠ bài đã xuất bản ≠ Wikipedia). */
+  sourceType?: SourceType;
+  venue?: string | null;
+  citedByCount?: number | null;
+  publishedYear?: string | null;
+  doi?: string | null;
+  /** Nguồn được lấy thế nào: câu truy vấn, thời điểm, tham số — để tái lập lần tìm. */
+  retrieval?: SourceRetrieval;
+}
+
+export type SourceType =
+  | 'preprint'
+  | 'published_venue'
+  | 'other_scholarly'
+  | 'encyclopedia'
+  | 'web'
+  | 'web_pdf'
+  | 'user_upload'
+  | 'user_excerpt';
+
+export interface SourceRetrieval {
+  provider: string;
+  query?: string;
+  normalizedQuery?: string;
+  retrievedAt: string;
+  rank?: number;
+  fulltextUpgraded?: boolean;
+  requestedUrl?: string;
+  finalUrl?: string;
+  filename?: string;
+  params?: Record<string, unknown>;
+}
+
+/** Nguồn gốc thực tế của 1 lượt AI (provider, model yêu cầu/thực dùng, lane và lane lấy từ đâu). */
+export interface TurnProvenance {
+  providerId: string;
+  providerKind: string;
+  modelRequested: string;
+  modelUsed: string;
+  fallbackFrom?: string | null;
+  laneId: string;
+  laneSource: 'gateway' | 'pinned' | 'api' | 'unreported' | string;
+  laneRequestedByClient?: string | null;
+  retries?: number;
+  perspectiveId?: string;
+  detailMode?: string | null;
+  round?: number;
+  completedAt?: string;
+  elapsedSec?: number;
+}
+
+export interface StructuredWarningItem {
+  code: string;
+  params?: Record<string, unknown>;
+  text: string;
 }
 
 export interface TurnVerification {
@@ -38,12 +93,17 @@ export interface TurnVerification {
   unverifiedNumbers: Array<{ number: string; cited: string[]; sentence: string }>;
   abstractOnlyCited: string[];
   warnings: string[];
+  warningItems?: StructuredWarningItem[];
 }
+
+export type RoundKind = 'independent' | 'discuss' | 'rebuttal' | 'judge' | 'deep_research' | 'dossier';
 
 export interface ChatMessage {
   id: string;
   round: number;
   roundLabel: string; // e.g. "Vòng 0 · Trả lời độc lập"
+  roundKind?: RoundKind;
+  roundCount?: number;
   senderType: 'user' | 'ai' | 'judge' | 'system';
   perspectiveId?: string;
   handle?: string;
@@ -53,11 +113,13 @@ export interface ChatMessage {
   elapsedSec?: number;
   summary1Line?: string;
   content: string;
+  executiveSummaryCode?: 'empty_summary' | 'no_synthesis' | null;
   citedSourceIds: string[];
   verification?: TurnVerification;
   pinnedToReport?: boolean;
   preserveFull?: boolean;
   fallbackFrom?: string;
+  provenance?: TurnProvenance;
   createdAt: string;
 }
 
@@ -93,6 +155,46 @@ export interface RubricRow {
   rebuttal: number;
   total: number;
   fallbackScored?: boolean;
+  /** Số lần chấm có đủ điểm hợp lệ / tổng số lần chấm. */
+  runsScored?: number;
+  runsTotal?: number;
+  /** Chênh lệch tổng điểm lớn nhất giữa các lần chấm (đổi thứ tự ứng viên). */
+  totalSpread?: number;
+  totalsByRun?: Array<number | null>;
+}
+
+export type ClaimSupportLabel = 'supported' | 'partial' | 'unsupported' | 'unclear' | 'unchecked';
+
+export interface ClaimSupportCounts {
+  checked: number;
+  supported: number;
+  partial: number;
+  unsupported: number;
+  unclear: number;
+  unchecked: number;
+}
+
+export interface ClaimSupportResult {
+  id: string;
+  handle: string;
+  round: number;
+  sentence: string;
+  sourceIds: string[];
+  label: ClaimSupportLabel;
+  evidence: string;
+  evidenceQuoteFound: boolean | null;
+  downgradedNoQuote: boolean;
+}
+
+export interface ClaimSupportSummary {
+  totals: ClaimSupportCounts;
+  byHandle: Record<string, ClaimSupportCounts>;
+  warnings: string[];
+  warningItems?: StructuredWarningItem[];
+  claims: ClaimSupportResult[];
+  modelUsed?: string;
+  laneId?: string;
+  providerId?: string;
 }
 
 export interface VerificationSummary {
@@ -102,21 +204,49 @@ export interface VerificationSummary {
   totalNumericChecked: number;
   totalNumericMatched: number;
   warnings: string[];
+  warningItems?: StructuredWarningItem[];
+  claimSupport?: ClaimSupportSummary;
+}
+
+export interface JudgeReliability {
+  runsRequested: number;
+  runsCompleted: number;
+  runsParsed: number;
+  seed: string;
+  candidateOrders: string[][];
+  rankingStable: boolean | null;
+  maxTotalSpread: number;
+  judgeFamily: string;
+  debaterFamilies: string[];
+  sameFamilyAsDebaters: boolean;
+  runs: Array<Partial<TurnProvenance> & { runIndex: number; order: string[]; parsed: boolean; error: string | null }>;
 }
 
 export interface ReportData {
   title: string;
+  titleParams?: { roomTitle: string };
   subtitle: string;
+  metaParams?: {
+    anonymize: boolean;
+    runsCompleted: number;
+    sourceCount: number;
+    activeCount: number;
+    totalCount: number;
+  };
   executiveSummary: string;
+  executiveSummaryCode?: 'empty_summary' | 'no_synthesis' | null;
   perspectiveBreakdown: Array<{
     handle: string;
     summary: string;
+    summaryCode?: 'breakdown_fallback' | 'breakdown_default' | null;
     citations: string[];
   }>;
   openDebates: string[];
   rubric: RubricRow[];
   evaluationWarnings?: string[];
+  evaluationWarningItems?: StructuredWarningItem[];
   verificationSummary?: VerificationSummary;
+  judgeReliability?: JudgeReliability;
   updatedAt: string;
 }
 
@@ -131,6 +261,7 @@ export interface AuditEntry {
   fallbackWarning?: string;
   rawPrompt: string;
   sourceIdsSeen: string[];
+  provenance?: TurnProvenance;
   timestamp: string;
 }
 
@@ -296,4 +427,8 @@ export interface AppSettings {
   judgeModel?: string;
   judgeProviderId?: string;
   judgeLaneId?: string;
+  /** Số lần Trọng tài chấm với thứ tự ứng viên khác nhau (1–3, mặc định 2). */
+  judgeRuns?: number;
+  /** Bật bước kiểm "nguồn có ủng hộ từng câu khẳng định không" (mặc định bật). */
+  claimCheck?: boolean;
 }

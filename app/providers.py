@@ -11,6 +11,7 @@ import re
 import tempfile
 import time
 import uuid
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -295,7 +296,37 @@ class ProviderStore:
 
         kind = prov.get("kind") or "bridge"
         chosen_model = (model or prov.get("defaultModel") or self.default_model).strip()
+        result = await self._dispatch(
+            prov=prov,
+            kind=kind,
+            chosen_model=chosen_model,
+            default_bridge=default_bridge,
+            system_instruction=system_instruction,
+            user_prompt=user_prompt,
+            pinned_lane_id=pinned_lane_id,
+            exclude_lanes=exclude_lanes,
+            on_status=on_status,
+        )
+        return replace(
+            result,
+            provider_id=str(prov["id"]),
+            provider_kind=str(kind),
+            model_requested=result.model_requested or chosen_model,
+        )
 
+    async def _dispatch(
+        self,
+        *,
+        prov: dict[str, Any],
+        kind: str,
+        chosen_model: str,
+        default_bridge: BridgeClient,
+        system_instruction: str,
+        user_prompt: str,
+        pinned_lane_id: str | None,
+        exclude_lanes: list[str] | set[str] | None,
+        on_status: Any = None,
+    ) -> AdapterResult:
         if kind == "bridge":
             if prov["id"] == self.DEFAULT_BRIDGE_ID:
                 return await default_bridge.chat_stateless(
@@ -388,6 +419,7 @@ async def _call_gemini_official_api(
         fallback_from=None,
         retries=0,
         raw_prompt=f"{system_instruction}\n\n{user_prompt}".strip(),
+        lane_source="api",
     )
 
 
@@ -450,4 +482,5 @@ async def _call_openai_compat_api(
         fallback_from=None,
         retries=0,
         raw_prompt=f"{system_instruction}\n\n{user_prompt}".strip(),
+        lane_source="api",
     )

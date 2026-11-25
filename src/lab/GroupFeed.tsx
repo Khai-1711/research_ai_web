@@ -18,6 +18,14 @@ import {
 import type { ChatMessage, LaneInfo, LiveTurnPhase, Perspective, Room } from '../types.ts';
 import { formatLaneDisplay, getPerspectiveColorVar } from '../utils/themeAndExport.ts';
 import { MarkdownText } from './MarkdownText.tsx';
+import {
+  formatExecutiveSummary,
+  formatRoundLabel,
+  formatStructuredWarning,
+  localizeHandle,
+  localizeRoomTitle,
+  useI18n,
+} from '../utils/i18n.tsx';
 
 export interface ActiveLaneJob {
   perspectiveId: string;
@@ -34,9 +42,12 @@ export interface ActiveLaneJob {
   roundLabel: string;
 }
 
-function formatLivePhaseText(job: ActiveLaneJob): string {
+function formatLivePhaseText(
+  job: ActiveLaneJob,
+  t: (key: any, vars?: Record<string, string | number>) => string
+): string {
   if (job.status === 'queued') {
-    return 'Đang chờ luồng trống theo cấu hình max_concurrency…';
+    return t('statusQueuedDesc');
   }
   switch (job.phase) {
     case 'queued_lock':
@@ -48,7 +59,7 @@ function formatLivePhaseText(job: ActiveLaneJob): string {
     case 'generating':
       return `Đang viết phân tích${job.replyChars ? ` (đã nhận ${job.replyChars.toLocaleString()} ký tự)` : ''}…`;
     default:
-      return `Đang phân tích và tổng hợp lập luận (${job.roundLabel})…`;
+      return t('statusAnalyzing', { label: job.roundLabel });
   }
 }
 
@@ -83,6 +94,7 @@ export function GroupFeed({
   onComparePerspective,
   onOpenCompare,
 }: GroupFeedProps) {
+  const { lang, t } = useI18n();
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState(room.title);
   useEffect(() => {
@@ -122,13 +134,13 @@ export function GroupFeed({
     for (const msg of filtered) {
       let g = groups.find((x) => x.round === msg.round);
       if (!g) {
-        g = { round: msg.round, label: msg.roundLabel, messages: [] };
+        g = { round: msg.round, label: formatRoundLabel(msg, lang), messages: [] };
         groups.push(g);
       }
       g.messages.push(msg);
     }
     return groups;
-  }, [room.messages, filterHandle, searchTerm]);
+  }, [room.messages, filterHandle, searchTerm, lang]);
 
   const toggleCard = (id: string) => {
     setExpandedIds((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -169,27 +181,27 @@ export function GroupFeed({
                 }}
                 className="px-3 py-1.5 rounded-lg bg-[var(--accent)] text-[var(--accent-ink)] text-xs font-semibold cursor-pointer"
               >
-                Lưu
+                {t('save')}
               </button>
               <button
                 type="button"
                 onClick={() => setEditingTitle(false)}
                 className="px-2.5 py-1.5 rounded-lg text-xs text-[var(--ink-muted)] hover:text-[var(--ink)] cursor-pointer"
               >
-                Hủy
+                {t('cancel')}
               </button>
             </div>
           ) : (
             <div className="group flex items-start gap-2">
               <h1 className="font-display text-2xl sm:text-[26px] font-semibold leading-tight text-[var(--ink)] [text-wrap:balance]">
-                {room.title}
+                {localizeRoomTitle(room.title, lang)}
               </h1>
               {onRenameRoom && (
                 <button
                   type="button"
-                  title="Đổi tên phòng nghiên cứu"
+                  title={t('renameRoomGroupTitle')}
                   onClick={() => {
-                    setTitleDraft(room.title);
+                    setTitleDraft(localizeRoomTitle(room.title, lang));
                     setEditingTitle(true);
                   }}
                   className="mt-1 p-1.5 rounded-md text-[var(--ink-muted)] hover:text-[var(--accent)] hover:bg-[var(--bg-subtle)] opacity-70 group-hover:opacity-100 transition-opacity cursor-pointer"
@@ -209,14 +221,14 @@ export function GroupFeed({
                   className="font-semibold"
                   style={{ color: getPerspectiveColorVar(room.perspectives[0]?.colorIndex ?? 0) }}
                 >
-                  @{room.perspectives[0]?.handle}
+                  @{localizeHandle(room.perspectives[0]?.handle || '', lang)}
                 </span>
                 <span aria-hidden="true">·</span>
                 <span className="font-mono-num text-[var(--ink-muted)]">
                   {room.perspectives[0]?.modelLabel}
                 </span>
                 <span aria-hidden="true">·</span>
-                <span>Nghiên cứu tập trung 1-1</span>
+                <span>{t('focus1on1')}</span>
               </div>
               <button
                 type="button"
@@ -224,7 +236,7 @@ export function GroupFeed({
                 className="inline-flex items-center gap-1 text-xs font-medium text-[var(--accent)] hover:underline whitespace-nowrap cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" />
-                Thêm góc nhìn
+                {t('addPerspectiveBtn')}
               </button>
             </div>
           ) : totalN <= 3 ? (
@@ -238,7 +250,7 @@ export function GroupFeed({
                       key={p.id}
                       type="button"
                       onClick={() => onTogglePerspective(p.id)}
-                      title={p.enabled ? 'Bấm để tạm tắt góc nhìn này cho lượt tới' : 'Bấm để bật lại'}
+                      title={p.enabled ? t('toggleOffTitle') : t('toggleOnTitle')}
                       className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-medium transition-all whitespace-nowrap cursor-pointer ${
                         p.enabled
                           ? 'bg-[var(--surface)] border-[var(--border-strong)] text-[var(--ink)]'
@@ -249,7 +261,7 @@ export function GroupFeed({
                         className="w-2 h-2 rounded-full shrink-0"
                         style={{ backgroundColor: p.enabled ? color : 'var(--ink-muted)' }}
                       />
-                      <span>@{p.handle}</span>
+                      <span>@{localizeHandle(p.handle, lang)}</span>
                     </button>
                   );
                 })}
@@ -259,7 +271,7 @@ export function GroupFeed({
                   className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-[var(--accent)] hover:bg-[var(--accent-soft)] transition-colors whitespace-nowrap cursor-pointer"
                 >
                   <Plus className="w-3.5 h-3.5" />
-                  Thêm góc nhìn
+                  {t('addPerspectiveBtn')}
                 </button>
               </div>
               <button
@@ -268,7 +280,7 @@ export function GroupFeed({
                 className="inline-flex items-center gap-1.5 text-xs font-medium text-[var(--ink-secondary)] hover:text-[var(--accent)] transition-colors whitespace-nowrap cursor-pointer"
               >
                 <ArrowLeftRight className="w-3.5 h-3.5" />
-                So sánh cạnh nhau
+                {t('compareSideBySide')}
               </button>
             </div>
           ) : (
@@ -281,7 +293,7 @@ export function GroupFeed({
                   className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[var(--surface)] border border-[var(--border-strong)] text-xs font-medium text-[var(--ink)] hover:border-[var(--accent)] transition-colors whitespace-nowrap cursor-pointer"
                 >
                   <Users className="w-3.5 h-3.5 text-[var(--accent)]" />
-                  Góc nhìn: {activeCount}/{totalN}
+                  {t('perspectivesBtnCount', { active: activeCount, total: totalN })}
                 </button>
 
                 <div className="inline-flex items-center p-0.5 rounded-lg bg-[var(--bg-subtle)] border border-[var(--border)]">
@@ -294,7 +306,7 @@ export function GroupFeed({
                         : 'text-[var(--ink-secondary)] hover:text-[var(--ink)]'
                     }`}
                   >
-                    Thẻ gọn ({activeCount})
+                    {t('compactCards', { count: activeCount })}
                   </button>
                   <button
                     type="button"
@@ -305,7 +317,7 @@ export function GroupFeed({
                         : 'text-[var(--ink-secondary)] hover:text-[var(--ink)]'
                     }`}
                   >
-                    Mở tất cả
+                    {t('expandAll')}
                   </button>
                 </div>
 
@@ -315,21 +327,21 @@ export function GroupFeed({
                   className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] text-xs font-medium text-[var(--ink-secondary)] hover:text-[var(--ink)] hover:border-[var(--accent)] transition-colors whitespace-nowrap cursor-pointer"
                 >
                   <ArrowLeftRight className="w-3.5 h-3.5" />
-                  So sánh 2–4 AI
+                  {t('compare2to4')}
                 </button>
               </div>
 
               <div className="flex items-center gap-2">
                 <select
-                  aria-label="Lọc theo góc nhìn"
+                  aria-label={t('filterAllPerspectives')}
                   value={filterHandle}
                   onChange={(e) => setFilterHandle(e.target.value)}
                   className="px-2.5 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] text-xs text-[var(--ink)] focus:outline-none focus:border-[var(--accent)] cursor-pointer"
                 >
-                  <option value="all">Lọc: Tất cả góc nhìn</option>
+                  <option value="all">{t('filterAllPerspectives')}</option>
                   {room.perspectives.map((p) => (
                     <option key={p.id} value={p.handle}>
-                      @{p.handle}
+                      @{localizeHandle(p.handle, lang)}
                     </option>
                   ))}
                 </select>
@@ -339,7 +351,7 @@ export function GroupFeed({
                     type="text"
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
-                    placeholder="Tìm ý…"
+                    placeholder={t('searchIdeasPlaceholder')}
                     className="w-32 sm:w-40 pl-7 pr-2.5 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] text-xs text-[var(--ink)] placeholder:text-[var(--ink-muted)] focus:outline-none focus:border-[var(--accent)]"
                   />
                 </div>
@@ -352,11 +364,10 @@ export function GroupFeed({
         {groupedByRound.length === 0 && !isRunning && (
           <div className="py-16 text-center space-y-2.5">
             <p className="font-display text-lg text-[var(--ink)]">
-              Phòng nghiên cứu đã sẵn sàng
+              {t('emptyRoomTitle')}
             </p>
             <p className="text-sm text-[var(--ink-secondary)] max-w-md mx-auto">
-              Đặt câu hỏi bên dưới để {activeCount} góc nhìn đang bật cùng phân tích, hoặc bấm{' '}
-              <strong>Deep Research</strong> để tìm nguồn học thuật thật từ arXiv và OpenAlex trước.
+              {t('emptyRoomHint', { count: activeCount })}
             </p>
           </div>
         )}
@@ -380,7 +391,7 @@ export function GroupFeed({
                       className="rounded-xl bg-[var(--bg-subtle)] border border-[var(--border)] px-5 py-4"
                     >
                       <div className="text-[11.5px] font-medium text-[var(--ink-muted)] mb-1">
-                        Câu hỏi của bạn
+                        {t('yourQuestion')}
                       </div>
                       <div className="text-[15.5px] font-medium text-[var(--ink)] leading-relaxed">
                         {msg.content}
@@ -399,7 +410,7 @@ export function GroupFeed({
                       <div className="flex items-center justify-between gap-2 text-xs">
                         <div className="flex items-center gap-2 font-semibold text-[var(--accent)]">
                           <BookOpen className="w-4 h-4 shrink-0" />
-                          <span>Hồ sơ Tài liệu Nghiên cứu (Toàn văn cho Phản biện & Trọng tài)</span>
+                          <span>{t('dossierTitle')}</span>
                         </div>
                         <button
                           type="button"
@@ -413,11 +424,11 @@ export function GroupFeed({
                         >
                           {isCollapsedDossier ? (
                             <>
-                              Mở tài liệu <ChevronDown className="w-3.5 h-3.5" />
+                              {t('openDossier')} <ChevronDown className="w-3.5 h-3.5" />
                             </>
                           ) : (
                             <>
-                              Thu gọn <ChevronUp className="w-3.5 h-3.5" />
+                              {t('collapse')} <ChevronUp className="w-3.5 h-3.5" />
                             </>
                           )}
                         </button>
@@ -430,7 +441,11 @@ export function GroupFeed({
                         />
                       ) : (
                         <p className="text-xs text-[var(--ink-secondary)]">
-                          {msg.summary1Line || `${msg.citedSourceIds.length} nguồn tài liệu đã sẵn sàng cho Hội đồng AI.`}
+                          {msg.roundKind === 'deep_research'
+                            ? t('dossierSummaryTpl', { count: msg.citedSourceIds.length })
+                            : msg.roundKind === 'dossier'
+                            ? t('dossierFullSummaryTpl', { count: msg.citedSourceIds.length })
+                            : msg.summary1Line || t('dossierReadyFallback', { count: msg.citedSourceIds.length })}
                         </p>
                       )}
                     </article>
@@ -445,14 +460,24 @@ export function GroupFeed({
                     >
                       <div className="flex items-center justify-between gap-2 text-xs">
                         <span className="font-semibold text-[var(--accent)]">
-                          Trọng tài · Tổng hợp vòng thảo luận
+                          {t('judgeRoundTitle')}
                         </span>
                         <span className="font-mono-num text-[var(--ink-muted)]">
                           {msg.elapsedSec ? `${msg.elapsedSec}s` : ''}
                         </span>
                       </div>
                       <MarkdownText
-                        text={msg.content}
+                        text={
+                          msg.executiveSummaryCode
+                            ? formatExecutiveSummary(
+                                {
+                                  executiveSummary: msg.content,
+                                  executiveSummaryCode: msg.executiveSummaryCode,
+                                },
+                                lang
+                              )
+                            : msg.content
+                        }
                         onCitationClick={onCitationClick}
                         validSourceIds={validSourceIds}
                       />
@@ -483,8 +508,13 @@ export function GroupFeed({
                       <div className="flex items-center justify-between gap-3">
                         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs min-w-0">
                           <span className="font-semibold text-[13.5px]" style={{ color: roleColor }}>
-                            @{msg.handle}
+                            @{localizeHandle(msg.handle || '', lang)}
                           </span>
+                          {msg.handle && localizeHandle(msg.handle, lang) !== msg.handle && (
+                            <span className="text-[11px] text-[var(--ink-muted)] font-mono-num">
+                              (@{msg.handle})
+                            </span>
+                          )}
                           <span aria-hidden="true" className="text-[var(--ink-muted)]">
                             ·
                           </span>
@@ -497,7 +527,7 @@ export function GroupFeed({
                                 ·
                               </span>
                               <span className="font-mono-num text-[var(--ink-muted)]">
-                                {formatLaneDisplay(msg.laneId, laneDetails)}
+                                {formatLaneDisplay(msg.laneId, laneDetails, lang)}
                               </span>
                             </>
                           )}
@@ -513,7 +543,7 @@ export function GroupFeed({
                           )}
                           {msg.fallbackFrom && (
                             <span
-                              title={`Đã đổi từ ${msg.fallbackFrom} sang ${msg.modelLabel}`}
+                              title={`${msg.fallbackFrom} -> ${msg.modelLabel}`}
                               className="inline-flex items-center gap-1 text-[var(--warn)] font-medium"
                             >
                               <AlertTriangle className="w-3 h-3" />
@@ -523,7 +553,7 @@ export function GroupFeed({
                           {msg.pinnedToReport && (
                             <span className="inline-flex items-center gap-1 text-[var(--accent)] font-medium">
                               <Pin className="w-3 h-3" />
-                              Đã ghim
+                              {t('pinnedBadge')}
                             </span>
                           )}
                         </div>
@@ -539,11 +569,11 @@ export function GroupFeed({
                           >
                             {isExpanded ? (
                               <>
-                                Thu gọn <ChevronUp className="w-3.5 h-3.5" />
+                                {t('collapse')} <ChevronUp className="w-3.5 h-3.5" />
                               </>
                             ) : (
                               <>
-                                Bung chi tiết <ChevronDown className="w-3.5 h-3.5" />
+                                {t('expandDetail')} <ChevronDown className="w-3.5 h-3.5" />
                               </>
                             )}
                           </button>
@@ -553,7 +583,7 @@ export function GroupFeed({
                       {/* Compact 2-line preview when collapsed */}
                       {!isExpanded && (
                         <div className="mt-2 text-[14px] text-[var(--ink)] leading-relaxed line-clamp-2">
-                          <span className="font-medium text-[var(--ink-secondary)]">Kết luận: </span>
+                          <span className="font-medium text-[var(--ink-secondary)]">{t('conclusionPrefix')}</span>
                           {msg.summary1Line || msg.content}
                           {msg.citedSourceIds.length > 0 && (
                             <span className="ml-1.5 inline-flex gap-1">
@@ -609,24 +639,29 @@ export function GroupFeed({
                                   ) : (
                                     <CheckCircle2 className="w-3.5 h-3.5" />
                                   )}
-                                  Kiểm chứng tự động
+                                  {t('autoVerified')}
                                 </span>
                                 <span>
-                                  {msg.verification.validCitations.length} trích dẫn trực tiếp
+                                  {t('directCitationsCount', { count: msg.verification.validCitations.length })}
                                 </span>
                                 {msg.verification.inferredCitations.length > 0 && (
                                   <span>
-                                    {msg.verification.inferredCitations.length} suy luận rõ nguồn
+                                    {t('inferredCitationsCount', { count: msg.verification.inferredCitations.length })}
                                   </span>
                                 )}
                                 {msg.verification.numericClaimsChecked > 0 && (
                                   <span>
-                                    Số liệu khớp: {msg.verification.numericClaimsMatched}/
-                                    {msg.verification.numericClaimsChecked}
+                                    {t('numericMatched', {
+                                      matched: msg.verification.numericClaimsMatched,
+                                      checked: msg.verification.numericClaimsChecked,
+                                    })}
                                   </span>
                                 )}
                               </div>
-                              {msg.verification.warnings.map((w, wIdx) => (
+                              {(msg.verification.warningItems && msg.verification.warningItems.length > 0
+                                ? msg.verification.warningItems.map((w) => formatStructuredWarning(w, lang))
+                                : msg.verification.warnings
+                              ).map((w, wIdx) => (
                                 <div key={wIdx} className="text-[var(--ink)]">
                                   • {w}
                                 </div>
@@ -642,7 +677,7 @@ export function GroupFeed({
                             }`}
                           >
                             <Pin className="w-3.5 h-3.5" />
-                            {msg.pinnedToReport ? 'Bỏ ghim Báo cáo' : 'Ghim vào Báo cáo'}
+                            {msg.pinnedToReport ? t('unpinReport') : t('pinToReport')}
                           </button>
                           {msg.handle && (
                             <button
@@ -651,7 +686,7 @@ export function GroupFeed({
                               className="inline-flex items-center gap-1.5 hover:text-[var(--accent)] transition-colors cursor-pointer"
                             >
                               <MessageCircle className="w-3.5 h-3.5" />
-                              Hỏi riêng @{msg.handle}
+                              {t('askRoleDirectly', { handle: localizeHandle(msg.handle, lang) })}
                             </button>
                           )}
                           {msg.perspectiveId && totalN >= 2 && (
@@ -661,7 +696,7 @@ export function GroupFeed({
                               className="inline-flex items-center gap-1.5 hover:text-[var(--accent)] transition-colors cursor-pointer"
                             >
                               <ArrowLeftRight className="w-3.5 h-3.5" />
-                              Đưa vào So sánh
+                              {t('compareThisRole')}
                             </button>
                           )}
                         </div>
@@ -685,7 +720,7 @@ export function GroupFeed({
                   const sec =
                     job.status === 'running'
                       ? Math.max(0.1, (nowMs - job.startedAtMs) / 1000).toFixed(1)
-                      : 'chờ đợt';
+                      : '…';
                   const heartbeatAgeSec =
                     job.lastHeartbeatMs != null
                       ? Math.max(0, Math.round((nowMs - job.lastHeartbeatMs) / 1000))
@@ -711,20 +746,20 @@ export function GroupFeed({
                             className="font-semibold"
                             style={{ color: getPerspectiveColorVar(job.colorIndex) }}
                           >
-                            @{job.handle}
+                            @{localizeHandle(job.handle, lang)}
                           </span>
                           <span aria-hidden="true" className="text-[var(--ink-muted)]">
                             ·
                           </span>
                           <span className="font-mono-num text-[var(--accent)] inline-flex items-center gap-1">
                             <Clock className="w-3 h-3" />
-                            {job.status === 'running' ? `${sec}s` : 'Đang xếp hàng'}
+                            {job.status === 'running' ? `${sec}s` : t('statusQueued')}
                           </span>
                           <span aria-hidden="true" className="text-[var(--ink-muted)]">
                             ·
                           </span>
                           <span className="font-mono-num text-[var(--ink-muted)]">
-                            {formatLaneDisplay(job.laneId, laneDetails)}
+                            {formatLaneDisplay(job.laneId, laneDetails, lang)}
                           </span>
                           {job.modelLabel && (
                             <>
@@ -738,7 +773,7 @@ export function GroupFeed({
                           )}
                         </div>
                         <p className="text-xs text-[var(--ink-secondary)] mt-1">
-                          {formatLivePhaseText(job)}
+                          {formatLivePhaseText(job, t)}
                         </p>
                       </div>
                       <button
@@ -747,7 +782,7 @@ export function GroupFeed({
                         className="px-3 py-1.5 rounded-lg border border-[var(--danger)] text-[var(--danger)] hover:bg-[var(--danger-soft)] text-xs font-medium inline-flex items-center gap-1 shrink-0 cursor-pointer"
                       >
                         <Square className="w-3 h-3 fill-current" />
-                        Dừng
+                        {t('stopBtn')}
                       </button>
                     </div>
                   );
@@ -758,28 +793,21 @@ export function GroupFeed({
                 <div className="flex items-center justify-between gap-3">
                   <div className="text-xs font-medium text-[var(--ink)] flex flex-wrap items-center gap-x-2 gap-y-1">
                     <span className="font-semibold text-[var(--accent)]">
-                      Đã xong {doneJobs.length}/{activeJobs.length}
+                      {t('batchDone', { done: doneJobs.length, total: activeJobs.length })}
                     </span>
                     <span aria-hidden="true" className="text-[var(--ink-muted)]">
                       ·
                     </span>
                     <span className="text-[var(--ink-secondary)]">
-                      Đang chạy:{' '}
+                      {t('batchRunning')}{' '}
                       {runningJobs
-                        .map((j) => {
-                          const phaseHint =
-                            j.phase === 'thinking'
-                              ? ' · đang nghĩ'
-                              : j.phase === 'generating'
-                              ? ' · đang viết'
-                              : j.phase === 'waiting_gemini'
-                              ? ' · chờ phản hồi'
-                              : '';
-                          return `@${j.handle} (${j.laneId}${j.modelLabel ? `/${j.modelLabel}` : ''} · ${Math.max(
-                            0.1,
-                            (nowMs - j.startedAtMs) / 1000
-                          ).toFixed(0)}s${phaseHint})`;
-                        })
+                        .map(
+                          (j) =>
+                            `@${localizeHandle(j.handle, lang)} (${j.laneId} · ${Math.max(
+                              0.1,
+                              (nowMs - j.startedAtMs) / 1000
+                            ).toFixed(0)}s)`
+                        )
                         .join(', ')}
                     </span>
                     {queuedJobs.length > 0 && (
@@ -787,7 +815,7 @@ export function GroupFeed({
                         <span aria-hidden="true" className="text-[var(--ink-muted)]">
                           ·
                         </span>
-                        <span className="text-[var(--ink-muted)]">Chờ: {queuedJobs.length}</span>
+                        <span className="text-[var(--ink-muted)]">{t('batchWaiting', { count: queuedJobs.length })}</span>
                       </>
                     )}
                   </div>
@@ -797,7 +825,7 @@ export function GroupFeed({
                     className="px-3 py-1 rounded-lg bg-[var(--danger-soft)] text-[var(--danger)] hover:opacity-90 text-xs font-medium inline-flex items-center gap-1 shrink-0 cursor-pointer"
                   >
                     <Square className="w-3 h-3 fill-current" />
-                    Dừng
+                    {t('stopBtn')}
                   </button>
                 </div>
                 <div className="h-1.5 w-full rounded-full bg-[var(--bg-subtle)] overflow-hidden">

@@ -21,16 +21,24 @@ _HISTORY_OMISSION_NOTE = (
 _RESEARCH_ROLE_KEYWORDS = ("nghiên_cứu", "nghien_cuu", "research", "tài_liệu", "tai_lieu")
 
 
+_CJK_TEXT_RE = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")
+
+
 def extract_summary_1line(text: str) -> str:
     for line in (text or "").splitlines():
         cleaned = line.strip()
         if not cleaned:
             continue
         cleaned = re.sub(r"^#+\s*", "", cleaned)
-        cleaned = re.sub(r"^\*\*Kết luận:\*\*\s*", "", cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r"^Kết luận:\s*", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(
+            r"^(?:\*\*)?(?:Kết luận|Conclusion|Summary|结论|总结|まとめ|結論|결론|요약)\s*[:：](?:\*\*)?\s*",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
         cleaned = cleaned.replace("**", "").strip()
-        if len(cleaned) >= 16:
+        min_len = 4 if _CJK_TEXT_RE.search(cleaned) else 16
+        if len(cleaned) >= min_len:
             return cleaned[:152].rstrip() + "…" if len(cleaned) > 155 else cleaned
     fallback = re.sub(r"\s+", " ", (text or "").replace("**", "")).strip()
     return fallback[:152].rstrip() + "…" if len(fallback) > 155 else fallback
@@ -130,6 +138,29 @@ def format_content_level_label(level: str | None) -> str:
     return "TRÍCH ĐOẠN"
 
 
+_SOURCE_TYPE_TAGS = {
+    "preprint": "PREPRINT · chưa bình duyệt",
+    "published_venue": "ĐÃ XUẤT BẢN",
+    "other_scholarly": "HỌC THUẬT KHÁC",
+    "encyclopedia": "BÁCH KHOA",
+    "web": "TRANG WEB",
+    "web_pdf": "PDF WEB",
+    "user_upload": "PDF NGƯỜI DÙNG",
+    "user_excerpt": "TRÍCH ĐOẠN NGƯỜI DÙNG",
+}
+
+
+def format_source_type_tag(source: dict[str, Any]) -> str:
+    """Nhãn loại nguồn để AI/Trọng tài cân trọng số bằng chứng (preprint ≠ bài đã xuất bản ≠ Wikipedia)."""
+    tag = _SOURCE_TYPE_TAGS.get(str(source.get("sourceType") or "").strip())
+    if not tag:
+        return ""
+    venue = str(source.get("venue") or "").strip()
+    if source.get("sourceType") == "published_venue" and venue:
+        tag = f"{tag}: {venue[:60]}"
+    return f" [{tag}]"
+
+
 def format_sources_for_prompt(
     sources: list[dict[str, Any]],
     *,
@@ -149,7 +180,7 @@ def format_sources_for_prompt(
         excerpt = str(s.get("excerpt") or "").strip()
         if len(excerpt) > max_excerpt_chars:
             excerpt = excerpt[: max_excerpt_chars - 1].rstrip() + "…"
-        lines.append(f'[{sid}] [{level_tag}] ({origin}) {title}: "{excerpt}"')
+        lines.append(f'[{sid}] [{level_tag}]{format_source_type_tag(s)} ({origin}) {title}: "{excerpt}"')
     return "\n".join(lines) if lines else "Chưa có nguồn đính kèm; trả lời dựa trên lập luận chuyên môn và không tự bịa mã [S#]."
 
 
@@ -209,12 +240,13 @@ def build_perspective_prompts(
     system_instruction = "\n".join(
         [
             f"Bạn đang đóng vai góc nhìn @{perspective.get('handle')} ({perspective.get('name')}) "
-            "trong một phòng nghiên cứu đa góc nhìn bằng tiếng Việt.",
+            "trong một phòng nghiên cứu đa góc nhìn.",
             str(perspective.get("rolePrompt") or ""),
             "QUY TẮC ĐỊNH DẠNG & TOÀN VẸN BẮT BUỘC:",
-            '1. Dòng đầu tiên PHẢI bắt đầu bằng "Kết luận: " tóm gọn lập trường cốt lõi trong đúng 1 câu (dưới 28 từ).',
+            "0. NGÔN NGỮ TRẢ LỜI BẮT BUỘC: Luôn trả lời hoàn toàn bằng ĐÚNG NGÔN NGỮ mà người dùng sử dụng trong CÂU HỎI CỦA NGƯỜI DÙNG (nếu người dùng hỏi tiếng Anh → trả lời tiếng Anh; tiếng Trung/Nhật/Hàn/Việt → trả lời đúng ngôn ngữ đó). Chỉ giữ nguyên mã [S#] và thuật ngữ trích dẫn nguyên văn từ nguồn khi cần thiết.",
+            '1. Dòng đầu tiên PHẢI bắt đầu bằng tiền tố tóm tắt kết luận khớp ngôn ngữ trả lời ("Kết luận: " / "Conclusion: " / "结论：" / "結論：" / "결론: ") và tóm gọn lập trường cốt lõi trong đúng 1 câu (dưới 28 từ).',
             "2. Sau đó trình bày phân tích có cấu trúc rõ ràng (dùng tiêu đề ##/###, gạch đầu dòng hoặc bảng Markdown | Cột | Giá trị |).",
-            "3. TÁCH BẠCH BẰNG CHỨNG VÀ SUY LUẬN: Chỉ gắn [S1], [S2]... cho thông tin/con số CÓ THẬT trực tiếp trong văn bản nguồn tương ứng. Khi suy diễn, tổng hợp chéo hoặc nêu giả thuyết không ghi trực tiếp trong nguồn, BẮT BUỘC viết [Suy luận từ S1] hoặc nói rõ đó là lập luận chuyên môn.",
+            "3. TÁCH BẠCH BẰNG CHỨNG VÀ SUY LUẬN: Chỉ gắn [S1], [S2]... cho thông tin/con số CÓ THẬT trực tiếp trong văn bản nguồn tương ứng. Khi suy diễn, tổng hợp chéo hoặc nêu giả thuyết không ghi trực tiếp trong nguồn, BẮT BUỘC viết thẻ suy luận theo ngôn ngữ trả lời ([Suy luận từ S1] / [Inferred from S1] / [推论自 S1] / [推論: S1] / [추론: S1]) hoặc nói rõ đó là lập luận chuyên môn.",
             "4. TRUNG THỰC MỨC NGUỒN: Với nguồn mang nhãn [CHỈ CÓ TÓM TẮT (ABSTRACT)], tuyệt đối không tự bịa chi tiết thực nghiệm, cỡ mẫu hay số liệu bảng biểu không có trong phần trích dẫn. Tuyệt đối không bịa mã [S#] ngoài danh sách.",
             length_rule,
         ]

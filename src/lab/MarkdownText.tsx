@@ -1,4 +1,6 @@
 import React from 'react';
+import { tokenizeInlineMarkdown } from '../utils/citations.ts';
+import { useI18n } from '../utils/i18n.tsx';
 
 interface MarkdownTextProps {
   text: string;
@@ -8,98 +10,101 @@ interface MarkdownTextProps {
 
 function renderInline(
   line: string,
+  t: ReturnType<typeof useI18n>['t'],
   onCitationClick?: (sourceId: string) => void,
   validSourceIds?: Set<string>
 ): React.ReactNode[] {
-  const tokenRegex =
-    /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\(https?:\/\/[^)]+\)|\[\s*(?:Suy\s+luận\s+từ|Inference\s+from)\s+S\d+\s*\]|\[S\d+\])/gi;
-  const parts = line.split(tokenRegex);
+  const tokens = tokenizeInlineMarkdown(line);
 
-  return parts.map((part, idx) => {
-    if (!part) return null;
-    if (part.startsWith('**') && part.endsWith('**') && part.length > 4) {
+  return tokens.map((tok, idx) => {
+    if (tok.type === 'bold') {
       return (
         <strong key={idx} className="font-semibold text-[var(--ink)]">
-          {renderInline(part.slice(2, -2), onCitationClick, validSourceIds)}
+          {renderInline(tok.content, t, onCitationClick, validSourceIds)}
         </strong>
       );
     }
-    if (part.startsWith('`') && part.endsWith('`') && part.length > 2) {
+    if (tok.type === 'code') {
       return (
         <code
           key={idx}
           className="font-mono-num text-[0.86em] px-1.5 py-0.5 rounded bg-[var(--bg-subtle)] text-[var(--ink)]"
         >
-          {part.slice(1, -1)}
+          {tok.content}
         </code>
       );
     }
-    const linkMatch = part.match(/^\[([^\]]+)\]\((https?:\/\/[^)]+)\)$/);
-    if (linkMatch) {
+    if (tok.type === 'link') {
       return (
         <a
           key={idx}
-          href={linkMatch[2]}
+          href={tok.url}
           target="_blank"
           rel="noreferrer"
           onClick={(e) => e.stopPropagation()}
           className="text-[var(--accent)] hover:underline font-medium"
         >
-          {linkMatch[1]}
+          {tok.label}
         </a>
       );
     }
-    const infMatch = part.match(/^\[\s*(?:Suy\s+luận\s+từ|Inference\s+from)\s+(S\d+)\s*\]$/i);
-    if (infMatch) {
-      const sid = infMatch[1].toUpperCase();
-      const isValid = !validSourceIds || validSourceIds.has(sid);
+    if (tok.type === 'inference') {
       return (
-        <button
-          key={idx}
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onCitationClick?.(sid);
-          }}
-          title={`Suy luận dựa trên nguồn ${sid} (không trích nguyên văn)`}
-          className={`inline-flex items-center font-mono-num text-[11px] font-medium mx-0.5 px-1.5 py-0.2 rounded border transition-colors cursor-pointer align-baseline ${
-            isValid
-              ? 'bg-[var(--bg-subtle)] border-[var(--border-strong)] text-[var(--ink-secondary)] hover:border-[var(--accent)] hover:text-[var(--accent)]'
-              : 'bg-[var(--warn-soft)] border-[var(--warn)]/40 text-[var(--warn)]'
-          }`}
-        >
-          Suy luận · {sid}
-        </button>
+        <span key={idx} className="inline-flex flex-wrap items-baseline gap-0.5">
+          {tok.sourceIds.map((sid) => {
+            const isValid = !validSourceIds || validSourceIds.has(sid);
+            return (
+              <button
+                key={sid}
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onCitationClick?.(sid);
+                }}
+                title={t('inferredTooltip', { id: sid })}
+                className={`inline-flex items-center font-mono-num text-[11px] font-medium mx-0.5 px-1.5 py-0.2 rounded border transition-colors cursor-pointer align-baseline ${
+                  isValid
+                    ? 'bg-[var(--bg-subtle)] border-[var(--border-strong)] text-[var(--ink-secondary)] hover:border-[var(--accent)] hover:text-[var(--accent)]'
+                    : 'bg-[var(--warn-soft)] border-[var(--warn)]/40 text-[var(--warn)]'
+                }`}
+              >
+                {t('inferredBadge', { id: sid })}
+              </button>
+            );
+          })}
+        </span>
       );
     }
-    const citMatch = part.match(/^\[(S\d+)\]$/i);
-    if (citMatch) {
-      const sid = citMatch[1].toUpperCase();
-      const isValid = !validSourceIds || validSourceIds.has(sid);
+    if (tok.type === 'citation') {
       return (
-        <button
-          key={idx}
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onCitationClick?.(sid);
-          }}
-          title={
-            isValid
-              ? `Xem nguồn trích dẫn trực tiếp ${sid}`
-              : `Mã nguồn ${sid} không có trong Kho nguồn hiện tại`
-          }
-          className={`inline-flex items-center font-mono-num text-[11px] font-medium mx-0.5 px-1.5 py-0.2 rounded transition-colors cursor-pointer align-baseline ${
-            isValid
-              ? 'bg-[var(--accent-soft)] text-[var(--accent)] hover:underline'
-              : 'bg-[var(--warn-soft)] text-[var(--warn)]'
-          }`}
-        >
-          [{sid}]
-        </button>
+        <span key={idx} className="inline-flex flex-wrap items-baseline gap-0.5">
+          {tok.sourceIds.map((sid) => {
+            const isValid = !validSourceIds || validSourceIds.has(sid);
+            return (
+              <button
+                key={sid}
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onCitationClick?.(sid);
+                }}
+                title={
+                  isValid ? t('directCitTooltip', { id: sid }) : t('invalidCitTooltip', { id: sid })
+                }
+                className={`inline-flex items-center font-mono-num text-[11px] font-medium mx-0.5 px-1.5 py-0.2 rounded transition-colors cursor-pointer align-baseline ${
+                  isValid
+                    ? 'bg-[var(--accent-soft)] text-[var(--accent)] hover:underline'
+                    : 'bg-[var(--warn-soft)] text-[var(--warn)]'
+                }`}
+              >
+                [{sid}]
+              </button>
+            );
+          })}
+        </span>
       );
     }
-    return <React.Fragment key={idx}>{part}</React.Fragment>;
+    return <React.Fragment key={idx}>{tok.raw}</React.Fragment>;
   });
 }
 
@@ -234,6 +239,7 @@ function parseMarkdownBlocks(text: string): ParsedBlock[] {
 }
 
 export function MarkdownText({ text, onCitationClick, validSourceIds }: MarkdownTextProps) {
+  const { t } = useI18n();
   const blocks = parseMarkdownBlocks(text);
 
   return (
@@ -261,7 +267,7 @@ export function MarkdownText({ text, onCitationClick, validSourceIds }: Markdown
               : 'text-[15px] font-semibold text-[var(--ink)] pt-1';
           return (
             <div key={bIdx} className={sizeClass}>
-              {renderInline(block.text, onCitationClick, validSourceIds)}
+              {renderInline(block.text, t, onCitationClick, validSourceIds)}
             </div>
           );
         }
@@ -273,7 +279,7 @@ export function MarkdownText({ text, onCitationClick, validSourceIds }: Markdown
               className="pl-3.5 py-1 border-l-2 border-[var(--accent)]/60 text-[14px] text-[var(--ink-secondary)] italic space-y-1"
             >
               {block.lines.map((l, lIdx) => (
-                <div key={lIdx}>{renderInline(l, onCitationClick, validSourceIds)}</div>
+                <div key={lIdx}>{renderInline(l, t, onCitationClick, validSourceIds)}</div>
               ))}
             </blockquote>
           );
@@ -293,7 +299,7 @@ export function MarkdownText({ text, onCitationClick, validSourceIds }: Markdown
                         key={hIdx}
                         className="py-2 px-3 font-semibold border-b border-[var(--border)] whitespace-nowrap"
                       >
-                        {renderInline(h, onCitationClick, validSourceIds)}
+                        {renderInline(h, t, onCitationClick, validSourceIds)}
                       </th>
                     ))}
                   </tr>
@@ -303,7 +309,7 @@ export function MarkdownText({ text, onCitationClick, validSourceIds }: Markdown
                     <tr key={rIdx} className="hover:bg-[var(--surface-hover)]">
                       {block.headers.map((_, cIdx) => (
                         <td key={cIdx} className="py-2 px-3 align-top text-[var(--ink)]">
-                          {renderInline(row[cIdx] ?? '', onCitationClick, validSourceIds)}
+                          {renderInline(row[cIdx] ?? '', t, onCitationClick, validSourceIds)}
                         </td>
                       ))}
                     </tr>
@@ -319,7 +325,7 @@ export function MarkdownText({ text, onCitationClick, validSourceIds }: Markdown
             <ul key={bIdx} className="space-y-1.5 pl-4 list-disc marker:text-[var(--ink-muted)]">
               {block.items.map((item, lIdx) => (
                 <li key={lIdx} className="pl-1">
-                  {renderInline(item, onCitationClick, validSourceIds)}
+                  {renderInline(item, t, onCitationClick, validSourceIds)}
                 </li>
               ))}
             </ul>
@@ -331,7 +337,7 @@ export function MarkdownText({ text, onCitationClick, validSourceIds }: Markdown
             <ol key={bIdx} className="space-y-1.5 pl-5 list-decimal marker:text-[var(--ink-muted)]">
               {block.items.map((item, lIdx) => (
                 <li key={lIdx} className="pl-1">
-                  {renderInline(item, onCitationClick, validSourceIds)}
+                  {renderInline(item, t, onCitationClick, validSourceIds)}
                 </li>
               ))}
             </ol>
@@ -343,7 +349,7 @@ export function MarkdownText({ text, onCitationClick, validSourceIds }: Markdown
             {block.lines.map((line, lIdx) => (
               <React.Fragment key={lIdx}>
                 {lIdx > 0 && <br />}
-                {renderInline(line, onCitationClick, validSourceIds)}
+                {renderInline(line, t, onCitationClick, validSourceIds)}
               </React.Fragment>
             ))}
           </p>

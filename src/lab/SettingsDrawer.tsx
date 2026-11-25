@@ -43,7 +43,9 @@ import {
   syncLaneApi,
   testProviderApi,
 } from '../utils/api.ts';
+import { LanguageSelector, localizeModelLabel, useI18n } from '../utils/i18n.tsx';
 
+// Lưu ý §5.b: role & prompt mẫu gửi cho AI giữ ổn định theo thiết kế; nhãn hiển thị dùng i18n khi render.
 const QUICK_ROLE_TEMPLATES = [
   {
     label: 'Nghiên cứu',
@@ -110,6 +112,7 @@ export function SettingsDrawer({
   onRefreshProvidersAndModels,
   onAddPerspectiveToRoom,
 }: SettingsDrawerProps) {
+  const { lang, t } = useI18n();
   const [showAddForm, setShowAddForm] = useState(false);
   const [kind, setKind] = useState<AIProviderConfig['kind']>('gemini_api');
   const [name, setName] = useState('');
@@ -233,9 +236,24 @@ export function SettingsDrawer({
     bridgeModels.length > 0
       ? bridgeModels
       : [
-          { id: 'gemini-neon', label: '4 Neon — Phân tích sâu hơn', providerId: 'bridge-local', providerName: 'Bridge' },
-          { id: 'gemini-carbon', label: '4 Carbon — Lập trình & Phức tạp', providerId: 'bridge-local', providerName: 'Bridge' },
-          { id: 'gemini-4-hydrogen', label: '4 Hydrogen — Trợ giúp hằng ngày', providerId: 'bridge-local', providerName: 'Bridge' },
+          {
+            id: 'gemini-neon',
+            label: localizeModelLabel({ id: 'gemini-neon', label: '4 Neon — Phân tích sâu hơn' }, lang),
+            providerId: 'bridge-local',
+            providerName: 'Bridge',
+          },
+          {
+            id: 'gemini-carbon',
+            label: localizeModelLabel({ id: 'gemini-carbon', label: '4 Carbon — Lập trình & Phức tạp' }, lang),
+            providerId: 'bridge-local',
+            providerName: 'Bridge',
+          },
+          {
+            id: 'gemini-4-hydrogen',
+            label: localizeModelLabel({ id: 'gemini-4-hydrogen', label: '4 Hydrogen — Trợ giúp hằng ngày' }, lang),
+            providerId: 'bridge-local',
+            providerName: 'Bridge',
+          },
         ];
 
   const handleSaveLaneName = async (laneId: string) => {
@@ -248,13 +266,13 @@ export function SettingsDrawer({
       setFormMsg({
         ok: true,
         text: renameDraft.trim()
-          ? `Đã đặt tên ${laneId} thành "${renameDraft.trim()}".`
-          : `Đã đưa tên ${laneId} về mặc định.`,
+          ? t('settingsLaneRenamed', { id: laneId, name: renameDraft.trim() })
+          : t('settingsLaneReset', { id: laneId }),
       });
     } catch (err) {
       setFormMsg({
         ok: false,
-        text: err instanceof Error ? err.message : 'Không đổi được tên tài khoản.',
+        text: err instanceof Error ? err.message : t('settingsErrRename'),
       });
     } finally {
       setRenameBusy(false);
@@ -274,6 +292,7 @@ export function SettingsDrawer({
     setAssignHandle(cleanDefaultHandle);
     setAssignRole('Nghiên cứu & Phân tích');
     setAssignTag('Nghiên_cứu');
+    // Lưu ý §5.b: Prompt vai trò mặc định gửi cho AI
     setAssignPrompt(
       'Bạn phụ trách nghiên cứu chuyên sâu, phân tích rõ luận điểm, trích dẫn [S#] khi có nguồn và mở đầu bằng "Kết luận: ...".'
     );
@@ -288,10 +307,11 @@ export function SettingsDrawer({
         .trim()
         .replace(/^@/, '')
         .replace(/\s+/g, '_') || lane.id;
-    const roleLabel = assignRole.trim() || `Chuyên gia (${lane.name || lane.id})`;
+    const roleLabel = assignRole.trim() || lane.name || lane.id;
     onAddPerspectiveToRoom({
       handle: cleanHandle,
       name: roleLabel,
+      // Lưu ý §5.b: Prompt vai trò mặc định gửi cho AI
       rolePrompt:
         assignPrompt.trim() ||
         `Bạn đảm nhận vai trò "${roleLabel}". Phân tích rõ ràng, sắc bén và mở đầu bằng "Kết luận: ...".`,
@@ -303,9 +323,10 @@ export function SettingsDrawer({
       enabled: true,
     });
     setAssignLaneId(null);
+    const namePart = lane.name && lane.name !== lane.id ? ` (${lane.name})` : '';
     setFormMsg({
       ok: true,
-      text: `Đã bốc ${lane.id}${lane.name && lane.name !== lane.id ? ` (${lane.name})` : ''} vào phòng với vai @${cleanHandle} (${roleLabel}).`,
+      text: t('settingsAssignedLane', { id: lane.id, namePart, handle: cleanHandle, role: roleLabel }),
     });
   };
 
@@ -317,12 +338,12 @@ export function SettingsDrawer({
       await onRefreshProvidersAndModels();
       setFormMsg({
         ok: true,
-        text: `Đã tạo thêm luồng ${res.lane_id} (:${res.port}). Hãy bấm "Đăng nhập" trên thẻ ${res.lane_id} để nạp tài khoản Google riêng.`,
+        text: t('settingsCreatedLane', { id: res.lane_id, port: res.port }),
       });
     } catch (err) {
       setFormMsg({
         ok: false,
-        text: err instanceof Error ? err.message : 'Không tạo được luồng acc mới.',
+        text: err instanceof Error ? err.message : t('settingsErrCreateLane'),
       });
     } finally {
       setVaultBusyKey(null);
@@ -339,13 +360,13 @@ export function SettingsDrawer({
         ok: res.total === 0 ? false : res.synced === res.total,
         text:
           res.total === 0
-            ? 'Chưa có profile nào đã đăng nhập để sync ngầm. Hãy bấm "Đăng nhập" trên từng acc trước.'
-            : `Đã sync ngầm xong ${res.synced}/${res.total} profile.`,
+            ? t('settingsNoLoggedInSync')
+            : t('settingsSyncedAll', { synced: res.synced, total: res.total }),
       });
     } catch (err) {
       setFormMsg({
         ok: false,
-        text: err instanceof Error ? err.message : 'Không sync ngầm được toàn bộ profile.',
+        text: err instanceof Error ? err.message : t('settingsErrSyncAll'),
       });
     } finally {
       setVaultBusyKey(null);
@@ -360,14 +381,12 @@ export function SettingsDrawer({
       await onRefreshProvidersAndModels();
       setFormMsg({
         ok: true,
-        text:
-          res.message ||
-          `Đã mở cửa sổ trình duyệt thật cho ${lane.id}. Hãy đăng nhập Google + vào Gemini rồi đóng cửa sổ (hoặc bấm "Xong & Sync").`,
+        text: res.message || t('settingsLoginOpened', { id: lane.id }),
       });
     } catch (err) {
       setFormMsg({
         ok: false,
-        text: err instanceof Error ? err.message : `Không mở được trình duyệt đăng nhập cho ${lane.id}.`,
+        text: err instanceof Error ? err.message : t('settingsErrLogin', { id: lane.id }),
       });
     } finally {
       setVaultBusyKey(null);
@@ -380,14 +399,15 @@ export function SettingsDrawer({
     try {
       const res = await finishLoginLaneApi(lane.id);
       await onRefreshProvidersAndModels();
+      const keyPart = res.account_key ? ` (${res.account_key.slice(0, 6)})` : '';
       setFormMsg({
         ok: true,
-        text: `Đã lấy & nạp xong cookie cho ${lane.id}${res.account_key ? ` (${res.account_key.slice(0, 6)})` : ''}.`,
+        text: t('settingsCookieLoaded', { id: lane.id, keyPart }),
       });
     } catch (err) {
       setFormMsg({
         ok: false,
-        text: err instanceof Error ? err.message : `Không hoàn tất sync cho ${lane.id}.`,
+        text: err instanceof Error ? err.message : t('settingsErrFinishLogin', { id: lane.id }),
       });
     } finally {
       setVaultBusyKey(null);
@@ -400,14 +420,15 @@ export function SettingsDrawer({
     try {
       const res = await syncLaneApi(lane.id, lane.name);
       await onRefreshProvidersAndModels();
+      const keyPart = res.account_key ? ` (${res.account_key.slice(0, 6)})` : '';
       setFormMsg({
         ok: true,
-        text: `Đã sync ngầm cookie mới cho ${lane.id}${res.account_key ? ` (${res.account_key.slice(0, 6)})` : ''}.`,
+        text: t('settingsSyncedOne', { id: lane.id, keyPart }),
       });
     } catch (err) {
       setFormMsg({
         ok: false,
-        text: err instanceof Error ? err.message : `Sync ngầm ${lane.id} thất bại.`,
+        text: err instanceof Error ? err.message : t('settingsErrSyncOne', { id: lane.id }),
       });
     } finally {
       setVaultBusyKey(null);
@@ -465,14 +486,20 @@ export function SettingsDrawer({
         });
       }
 
-      setFormMsg({ ok: true, text: `Đã thêm "${res.provider.name}" (${res.provider.defaultModel}).` });
+      setFormMsg({
+        ok: true,
+        text: t('settingsProviderAdded', {
+          name: res.provider.name,
+          model: res.provider.defaultModel || defaultModel.trim(),
+        }),
+      });
       setName('');
       setApiKey('');
       setShowAddForm(false);
     } catch (err) {
       setFormMsg({
         ok: false,
-        text: err instanceof Error ? err.message : 'Không thêm được nguồn AI.',
+        text: err instanceof Error ? err.message : t('settingsErrAddProvider'),
       });
     } finally {
       setSubmitting(false);
@@ -488,7 +515,7 @@ export function SettingsDrawer({
         ...prev,
         [key]: {
           ok: true,
-          text: `OK (${res.laneId || laneId || 'bridge'} · ${res.modelUsed} · ${res.elapsedSec}s): ${res.preview || 'Kết nối thành công'}`,
+          text: `OK (${res.laneId || laneId || 'bridge'} · ${res.modelUsed} · ${res.elapsedSec}s): ${res.preview || t('settingsTestOkFallback')}`,
         },
       }));
     } catch (err) {
@@ -496,7 +523,7 @@ export function SettingsDrawer({
         ...prev,
         [key]: {
           ok: false,
-          text: err instanceof Error ? err.message : 'Kết nối thất bại.',
+          text: err instanceof Error ? err.message : t('settingsErrTest'),
         },
       }));
     } finally {
@@ -511,7 +538,7 @@ export function SettingsDrawer({
     } catch (err) {
       setFormMsg({
         ok: false,
-        text: err instanceof Error ? err.message : 'Không xoá được nguồn AI.',
+        text: err instanceof Error ? err.message : t('settingsErrDeleteProvider'),
       });
     }
   };
@@ -523,15 +550,15 @@ export function SettingsDrawer({
       <div
         className="w-full max-w-[430px] h-full bg-[var(--surface)] border-l border-[var(--border)] shadow-[var(--shadow-float)] flex flex-col"
         role="dialog"
-        aria-label="Cài đặt AI, Model và Điều phối"
+        aria-label={t('settingsAriaLabel')}
       >
         <div className="px-5 py-4 border-b border-[var(--border)] flex items-center justify-between">
           <div>
             <h2 className="font-display text-lg font-semibold text-[var(--ink)]">
-              Cài đặt AI & Model
+              {t('settingsTitleHeading')}
             </h2>
             <p className="text-xs text-[var(--ink-muted)] mt-0.5">
-              Nạp AI qua Bridge cục bộ hoặc API Key và chọn model cho Trọng tài.
+              {t('settingsSubtitle')}
             </p>
           </div>
           <button
@@ -544,7 +571,19 @@ export function SettingsDrawer({
         </div>
 
         <div className="flex-1 overflow-y-auto p-5 space-y-6">
-          {/* 0. GitHub Pages & Remote Tunnel Sharing */}
+          {/* 0. UI Language Selector */}
+          <section className="p-3.5 rounded-xl bg-[var(--bg)] border border-[var(--border)] space-y-2">
+            <div className="text-xs font-semibold text-[var(--ink)]">{t('langSectionTitle')}</div>
+            <p className="text-[11px] text-[var(--ink-muted)] leading-relaxed">
+              {t('langSectionHint')}
+            </p>
+            <LanguageSelector />
+            <p className="text-[11px] text-[var(--accent)] font-medium">
+              {t('langAutoAiNote')}
+            </p>
+          </section>
+
+          {/* 0b. GitHub Pages & Remote Tunnel Sharing */}
           <section className="space-y-2.5 p-3.5 rounded-xl bg-[var(--bg)] border border-[var(--border)]">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 text-xs font-semibold text-[var(--ink)]">
@@ -640,13 +679,13 @@ export function SettingsDrawer({
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 text-xs font-semibold text-[var(--ink)]">
                 <KeyRound className="w-4 h-4 text-[var(--accent)]" />
-                Nguồn AI đã kết nối ({providers.length})
+                {t('connectedProvidersTitle', { count: providers.length })}
               </div>
               <div className="flex items-center gap-1.5">
                 <button
                   type="button"
                   onClick={() => onRefreshProvidersAndModels()}
-                  title="Tải lại danh sách model và luồng Bridge"
+                  title={t('reloadProvidersTitle')}
                   className="p-1.5 rounded-lg border border-[var(--border)] text-[var(--ink-secondary)] hover:text-[var(--ink)] hover:border-[var(--accent)] cursor-pointer"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
@@ -661,7 +700,7 @@ export function SettingsDrawer({
                     className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-[var(--accent)] text-[var(--accent-ink)] text-xs font-semibold hover:bg-[var(--accent-hover)] cursor-pointer"
                   >
                     <Plus className="w-3.5 h-3.5" />
-                    Thêm AI
+                    {t('addAiBtn')}
                   </button>
                 )}
               </div>
@@ -685,14 +724,14 @@ export function SettingsDrawer({
                 onSubmit={handleCreateProvider}
                 className="p-3.5 rounded-xl bg-[var(--bg)] border border-[var(--accent)]/50 space-y-2.5 text-xs"
               >
-                <div className="font-semibold text-[var(--ink)]">Nạp nguồn AI mới</div>
+                <div className="font-semibold text-[var(--ink)]">{t('addProviderHeading')}</div>
 
                 <div className="grid grid-cols-3 gap-1.5">
                   {(
                     [
-                      { id: 'bridge', label: 'Bridge cục bộ' },
-                      { id: 'gemini_api', label: 'Gemini API' },
-                      { id: 'openai_compat', label: 'OpenAI / Khác' },
+                      { id: 'bridge', label: t('kindBridgeLocal') },
+                      { id: 'gemini_api', label: t('kindGeminiApi') },
+                      { id: 'openai_compat', label: t('kindOpenAiCompat') },
                     ] as const
                   ).map((opt) => (
                     <button
@@ -712,7 +751,7 @@ export function SettingsDrawer({
 
                 <div>
                   <label className="block text-[11px] text-[var(--ink-muted)] mb-1">
-                    Tên AI (hiển thị trong danh sách)
+                    {t('providerNameLabel')}
                   </label>
                   <input
                     type="text"
@@ -721,10 +760,10 @@ export function SettingsDrawer({
                     onChange={(e) => setName(e.target.value)}
                     placeholder={
                       kind === 'bridge'
-                        ? 'vd: Gemini_Bridge_Phụ'
+                        ? 'Gemini_Bridge_2'
                         : kind === 'gemini_api'
-                        ? 'vd: Gemini_API_Chính'
-                        : 'vd: DeepSeek_R1 hoặc Ollama_Local'
+                        ? 'Gemini_API_Main'
+                        : 'DeepSeek_R1 / Ollama_Local'
                     }
                     className="w-full px-2.5 py-1.5 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-[var(--ink)] focus:outline-none focus:border-[var(--accent)]"
                   />
@@ -733,7 +772,7 @@ export function SettingsDrawer({
                 {kind !== 'gemini_api' && (
                   <div>
                     <label className="block text-[11px] text-[var(--ink-muted)] mb-1">
-                      {kind === 'bridge' ? 'URL Bridge (Gateway hoặc worker riêng)' : 'Base URL API'}
+                      {kind === 'bridge' ? t('providerUrlBridge') : t('providerUrlBase')}
                     </label>
                     <input
                       type="text"
@@ -742,8 +781,8 @@ export function SettingsDrawer({
                       onChange={(e) => setBaseUrl(e.target.value)}
                       placeholder={
                         kind === 'bridge'
-                          ? 'http://127.0.0.1:10000'
-                          : 'https://api.deepseek.com/v1 hoặc http://127.0.0.1:11434/v1'
+                          ? 'http://127.0.0.1:11000'
+                          : 'https://api.deepseek.com/v1'
                       }
                       className="w-full px-2.5 py-1.5 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-[var(--ink)] font-mono-num focus:outline-none focus:border-[var(--accent)]"
                     />
@@ -752,7 +791,7 @@ export function SettingsDrawer({
 
                 <div>
                   <label className="block text-[11px] text-[var(--ink-muted)] mb-1">
-                    API Key {kind === 'bridge' ? '(tùy chọn)' : kind === 'openai_compat' ? '(để trống nếu dùng Ollama cục bộ)' : '(bắt buộc)'}
+                    API Key {kind === 'bridge' ? t('apiKeyOptional') : kind === 'openai_compat' ? t('apiKeyOllama') : t('apiKeyRequired')}
                   </label>
                   <input
                     type="password"
@@ -766,23 +805,23 @@ export function SettingsDrawer({
 
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="block text-[11px] text-[var(--ink-muted)] mb-1">Model mặc định</label>
+                    <label className="block text-[11px] text-[var(--ink-muted)] mb-1">{t('defaultModelLabel')}</label>
                     <input
                       type="text"
                       required
                       value={defaultModel}
                       onChange={(e) => setDefaultModel(e.target.value)}
-                      placeholder="vd: gemini-neon"
+                      placeholder="gemini-neon"
                       className="w-full px-2.5 py-1.5 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-[var(--ink)] font-mono-num focus:outline-none focus:border-[var(--accent)]"
                     />
                   </div>
                   <div>
-                    <label className="block text-[11px] text-[var(--ink-muted)] mb-1">Vai trò khi thêm phòng</label>
+                    <label className="block text-[11px] text-[var(--ink-muted)] mb-1">{t('roleOnAddLabel')}</label>
                     <input
                       type="text"
                       value={roleTitle}
                       onChange={(e) => setRoleTitle(e.target.value)}
-                      placeholder="vd: Soi rủi ro & Phản biện"
+                      placeholder="Risk & Fact Critic"
                       className="w-full px-2.5 py-1.5 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-[var(--ink)] focus:outline-none focus:border-[var(--accent)]"
                     />
                   </div>
@@ -795,7 +834,7 @@ export function SettingsDrawer({
                     onChange={(e) => setAlsoAddToRoom(e.target.checked)}
                     className="accent-[var(--accent)]"
                   />
-                  <span>Thêm luôn làm 1 luồng AI trong phòng đang mở</span>
+                  <span>{t('alsoAddToRoomLabel')}</span>
                 </label>
 
                 <div className="flex justify-end gap-1.5 pt-1">
@@ -804,14 +843,14 @@ export function SettingsDrawer({
                     onClick={() => setShowAddForm(false)}
                     className="px-2.5 py-1.5 rounded-lg text-[var(--ink-secondary)] hover:bg-[var(--bg-subtle)] cursor-pointer"
                   >
-                    Hủy
+                    {t('cancel')}
                   </button>
                   <button
                     type="submit"
                     disabled={submitting}
                     className="px-3 py-1.5 rounded-lg bg-[var(--accent)] text-[var(--accent-ink)] font-semibold hover:bg-[var(--accent-hover)] disabled:opacity-50 cursor-pointer"
                   >
-                    {submitting ? 'Đang lưu...' : 'Lưu nguồn AI'}
+                    {submitting ? t('savingText') : t('saveProviderBtn')}
                   </button>
                 </div>
               </form>
@@ -839,7 +878,11 @@ export function SettingsDrawer({
                         {isDefaultBridge && health && (
                           <div className="text-[11px] mt-1 font-mono-num text-[var(--ok)] flex items-center gap-1">
                             <CheckCircle2 className="w-3 h-3" />
-                            {health.healthyWorkers}/{health.totalWorkers} luồng đã đăng nhập ({health.lanes.join(', ')})
+                            {t('loggedInLanesSummary', {
+                              healthy: health.healthyWorkers,
+                              total: health.totalWorkers,
+                              lanes: health.lanes.join(', '),
+                            })}
                           </div>
                         )}
                         {!isDefaultBridge && p.hasApiKey && (
@@ -855,13 +898,13 @@ export function SettingsDrawer({
                           onClick={() => handleTest(p.id)}
                           className="px-2 py-1 rounded-md border border-[var(--border)] bg-[var(--surface)] text-[11px] font-medium text-[var(--ink-secondary)] hover:border-[var(--accent)] hover:text-[var(--ink)] disabled:opacity-50 cursor-pointer"
                         >
-                          {testingId === p.id ? 'Đang thử...' : 'Test'}
+                          {testingId === p.id ? t('testingShort') : t('testBtn')}
                         </button>
                         {!isRemoteGuest && !p.builtin && (
                           <button
                             type="button"
                             onClick={() => handleDelete(p.id)}
-                            title="Xóa nguồn AI này"
+                            title={t('deleteProviderTitle')}
                             className="p-1 rounded-md text-[var(--ink-muted)] hover:text-[var(--danger)] cursor-pointer"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -884,7 +927,9 @@ export function SettingsDrawer({
                       <div className="pt-2 mt-2 border-t border-[var(--border)] space-y-2">
                         <div className="flex flex-wrap items-center justify-between gap-1.5">
                           <div className="text-[11px] font-medium text-[var(--ink-secondary)]">
-                            Từng tài khoản Bridge ({health?.cookieSyncBrowser ? `CDP: ${health.cookieSyncBrowser}` : 'Profile Vault'})
+                            {t('perAccountBridge', {
+                              mode: health?.cookieSyncBrowser ? `CDP: ${health.cookieSyncBrowser}` : 'Profile Vault',
+                            })}
                           </div>
                           {!isRemoteGuest && (
                             <div className="flex items-center gap-1">
@@ -892,21 +937,21 @@ export function SettingsDrawer({
                                 type="button"
                                 disabled={vaultBusyKey !== null}
                                 onClick={handleSyncAllLanes}
-                                title="Sync ngầm tất cả tài khoản đã từng đăng nhập (0 tab mở)"
+                                title={t('syncAllTitle')}
                                 className="px-2 py-0.5 rounded border border-[var(--border)] bg-[var(--surface)] text-[10.5px] text-[var(--ink-secondary)] hover:text-[var(--ink)] hover:border-[var(--accent)] inline-flex items-center gap-1 disabled:opacity-50 cursor-pointer"
                               >
                                 <RefreshCw className={`w-2.5 h-2.5 ${vaultBusyKey === 'sync-all' ? 'animate-spin' : ''}`} />
-                                {vaultBusyKey === 'sync-all' ? 'Đang sync...' : 'Sync tất cả'}
+                                {vaultBusyKey === 'sync-all' ? t('syncingText') : t('syncAllBtn')}
                               </button>
                               <button
                                 type="button"
                                 disabled={vaultBusyKey !== null}
                                 onClick={handleCreateLane}
-                                title="Tạo thêm luồng acc mới (.env.accN)"
+                                title={t('createLaneTitle')}
                                 className="px-2 py-0.5 rounded bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent)] hover:text-[var(--accent-ink)] text-[10.5px] font-semibold inline-flex items-center gap-0.5 disabled:opacity-50 cursor-pointer"
                               >
                                 <Plus className="w-2.5 h-2.5" />
-                                {vaultBusyKey === 'create-lane' ? 'Đang tạo...' : 'Thêm acc'}
+                                {vaultBusyKey === 'create-lane' ? t('creatingText') : t('addLaneBtn')}
                               </button>
                             </div>
                           )}
@@ -953,12 +998,12 @@ export function SettingsDrawer({
                                   </div>
                                   <div className="text-[10.5px] text-[var(--ink-muted)] mt-0.5 font-mono-num">
                                     {lane.loginOpen
-                                      ? 'Đang mở trình duyệt đăng nhập...'
+                                      ? t('laneBrowserOpen')
                                       : isReady
-                                      ? 'Đã đăng nhập Cookie'
+                                      ? t('laneCookieOk')
                                       : lane.control !== 'on'
-                                      ? 'Đang TẮT'
-                                      : 'Chế độ Khách'}
+                                      ? t('laneOff')
+                                      : t('laneGuest')}
                                     {lane.accountKey ? ` · #${lane.accountKey.slice(0, 6)}` : ''}
                                     {lane.url ? ` · ${lane.url.replace(/^https?:\/\//, '')}` : ''}
                                   </div>
@@ -968,7 +1013,7 @@ export function SettingsDrawer({
                                   {!isRemoteGuest && (
                                     <button
                                       type="button"
-                                      title="Đặt tên gợi nhớ cho tài khoản này"
+                                      title={t('renameLaneTitle')}
                                       onClick={() => {
                                         if (isRenaming) {
                                           setRenamingLaneId(null);
@@ -980,17 +1025,17 @@ export function SettingsDrawer({
                                       className="px-2 py-1 rounded-md border border-[var(--border)] bg-[var(--bg)] text-[11px] text-[var(--ink-secondary)] hover:text-[var(--ink)] hover:border-[var(--accent)] inline-flex items-center gap-1 cursor-pointer"
                                     >
                                       <Edit3 className="w-3 h-3" />
-                                      Tên
+                                      {t('renameLaneBtn')}
                                     </button>
                                   )}
                                   <button
                                     type="button"
                                     disabled={testingId === laneTestKey}
                                     onClick={() => handleTest(p.id, lane.id)}
-                                    title={`Kiểm tra riêng ${lane.id}`}
+                                    title={lane.id}
                                     className="px-2 py-1 rounded-md border border-[var(--border)] bg-[var(--bg)] text-[11px] text-[var(--ink-secondary)] hover:text-[var(--ink)] hover:border-[var(--accent)] disabled:opacity-50 cursor-pointer"
                                   >
-                                    {testingId === laneTestKey ? '...' : 'Test'}
+                                    {testingId === laneTestKey ? '...' : t('testBtn')}
                                   </button>
                                   <button
                                     type="button"
@@ -1002,7 +1047,7 @@ export function SettingsDrawer({
                                     }`}
                                   >
                                     <UserPlus className="w-3 h-3" />
-                                    Gán vai
+                                    {t('assignRoleBtn')}
                                   </button>
                                 </div>
                               </div>
@@ -1018,7 +1063,7 @@ export function SettingsDrawer({
                                       className="px-2.5 py-1 rounded-md bg-[var(--ok)] text-white text-[11px] font-semibold inline-flex items-center gap-1 disabled:opacity-50 cursor-pointer"
                                     >
                                       <Check className="w-3 h-3" />
-                                      {vaultBusyKey === `finish::${lane.id}` ? 'Đang lấy cookie...' : 'Xong & Sync'}
+                                      {vaultBusyKey === `finish::${lane.id}` ? t('gettingCookieText') : t('finishLoginBtn')}
                                     </button>
                                   ) : (
                                     <>
@@ -1026,7 +1071,6 @@ export function SettingsDrawer({
                                         type="button"
                                         disabled={vaultBusyKey !== null}
                                         onClick={() => handleLaneLogin(lane)}
-                                        title="Mở trình duyệt thật để đăng nhập 1 lần (qua 2FA/Passkey)"
                                         className={`px-2.5 py-1 rounded-md text-[11px] font-medium inline-flex items-center gap-1 disabled:opacity-50 cursor-pointer ${
                                           !isReady || hasDup
                                             ? 'bg-[var(--accent)] text-[var(--accent-ink)] hover:bg-[var(--accent-hover)]'
@@ -1035,27 +1079,22 @@ export function SettingsDrawer({
                                       >
                                         <LogIn className="w-3 h-3" />
                                         {vaultBusyKey === `login::${lane.id}`
-                                          ? 'Đang mở...'
+                                          ? t('openingText')
                                           : isReady && !hasDup
-                                          ? 'Đổi acc'
+                                          ? t('switchAccBtn')
                                           : hasDup
-                                          ? 'Đổi acc riêng'
-                                          : 'Đăng nhập 1 lần'}
+                                          ? t('switchSeparateAccBtn')
+                                          : t('loginOnceBtn')}
                                       </button>
                                       {(lane.hasProfileData || isReady) && (
                                         <button
                                           type="button"
                                           disabled={vaultBusyKey !== null || !lane.hasProfileData}
                                           onClick={() => handleSyncLane(lane)}
-                                          title={
-                                            lane.hasProfileData
-                                              ? 'Tự làm mới cookie ngầm (~3-5s, 0 tab mở)'
-                                              : 'Hãy bấm Đăng nhập 1 lần trước để tạo Profile Vault trên đĩa'
-                                          }
                                           className="px-2.5 py-1 rounded-md border border-[var(--border)] bg-[var(--bg)] text-[11px] text-[var(--ink-secondary)] hover:text-[var(--ink)] hover:border-[var(--accent)] inline-flex items-center gap-1 disabled:opacity-50 cursor-pointer"
                                         >
                                           <Zap className="w-3 h-3 text-[var(--accent)]" />
-                                          {vaultBusyKey === `sync::${lane.id}` ? 'Đang sync...' : 'Sync ngầm'}
+                                          {vaultBusyKey === `sync::${lane.id}` ? t('syncingText') : t('syncBgBtn')}
                                         </button>
                                       )}
                                     </>
@@ -1071,7 +1110,7 @@ export function SettingsDrawer({
                                 <div className="text-[11px] px-2 py-1.5 rounded-md bg-[var(--warn-soft)] text-[var(--warn)] flex items-start gap-1.5 border border-[var(--warn)]/30">
                                   <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                                   <span>
-                                    Đang dùng trùng tài khoản Google với <strong>{(lane.duplicatedWith || []).join(', ')}</strong>. Hãy bấm <strong>Đổi acc riêng</strong> để tách luồng độc lập.
+                                    {t('dupWarning', { others: (lane.duplicatedWith || []).join(', ') })}
                                   </span>
                                 </div>
                               )}
@@ -1097,7 +1136,7 @@ export function SettingsDrawer({
                                         setRenamingLaneId(null);
                                       }
                                     }}
-                                    placeholder={`vd: Acc Nghiên cứu, Acc Code (${lane.bridgeLabel})`}
+                                    placeholder={lane.bridgeLabel}
                                     autoFocus
                                     className="flex-1 px-2 py-1 rounded-md bg-[var(--bg)] border border-[var(--accent)] text-[11.5px] text-[var(--ink)] focus:outline-none"
                                   />
@@ -1107,14 +1146,14 @@ export function SettingsDrawer({
                                     onClick={() => handleSaveLaneName(lane.id)}
                                     className="px-2.5 py-1 rounded-md bg-[var(--accent)] text-[var(--accent-ink)] text-[11px] font-semibold disabled:opacity-50 cursor-pointer"
                                   >
-                                    Lưu
+                                    {t('save')}
                                   </button>
                                   <button
                                     type="button"
                                     onClick={() => setRenamingLaneId(null)}
                                     className="px-1.5 py-1 rounded-md text-[11px] text-[var(--ink-muted)] hover:text-[var(--ink)] cursor-pointer"
                                   >
-                                    Hủy
+                                    {t('cancel')}
                                   </button>
                                 </div>
                               )}
@@ -1126,25 +1165,38 @@ export function SettingsDrawer({
                                   className="p-2.5 rounded-lg bg-[var(--bg)] border border-[var(--accent)]/50 space-y-2"
                                 >
                                   <div className="text-[11px] font-semibold text-[var(--accent)]">
-                                    Gán riêng {lane.id} ({lane.name}) vào phòng
-                                    {activeRoomTitle ? ` "${activeRoomTitle.slice(0, 32)}"` : ' đang mở'}
+                                    {t('pinAssignTitle', {
+                                      id: lane.id,
+                                      name: lane.name,
+                                      room: activeRoomTitle ? `"${activeRoomTitle.slice(0, 32)}"` : '',
+                                    })}
                                   </div>
                                   <div className="flex flex-wrap gap-1">
-                                    {QUICK_ROLE_TEMPLATES.map((tpl) => (
-                                      <button
-                                        key={tpl.handle}
-                                        type="button"
-                                        onClick={() => {
-                                          setAssignHandle(tpl.handle);
-                                          setAssignRole(tpl.role);
-                                          setAssignTag(tpl.tag);
-                                          setAssignPrompt(tpl.prompt);
-                                        }}
-                                        className="px-2 py-0.5 rounded bg-[var(--surface)] border border-[var(--border)] text-[10.5px] text-[var(--ink-secondary)] hover:border-[var(--accent)] hover:text-[var(--ink)] cursor-pointer"
-                                      >
-                                        + {tpl.label}
-                                      </button>
-                                    ))}
+                                    {QUICK_ROLE_TEMPLATES.map((tpl) => {
+                                      const tplKey =
+                                        tpl.handle === 'Nghiên_cứu'
+                                          ? 'tplAcademic'
+                                          : tpl.handle === 'Phản_biện'
+                                          ? 'tplCritic'
+                                          : tpl.handle === 'Kỹ_thuật'
+                                          ? 'tplTech'
+                                          : 'tplCost';
+                                      return (
+                                        <button
+                                          key={tpl.handle}
+                                          type="button"
+                                          onClick={() => {
+                                            setAssignHandle(tpl.handle);
+                                            setAssignRole(tpl.role);
+                                            setAssignTag(tpl.tag);
+                                            setAssignPrompt(tpl.prompt);
+                                          }}
+                                          className="px-2 py-0.5 rounded bg-[var(--surface)] border border-[var(--border)] text-[10.5px] text-[var(--ink-secondary)] hover:border-[var(--accent)] hover:text-[var(--ink)] cursor-pointer"
+                                        >
+                                          + {t(tplKey)}
+                                        </button>
+                                      );
+                                    })}
                                   </div>
                                   <div className="grid grid-cols-2 gap-1.5">
                                     <input
@@ -1152,14 +1204,14 @@ export function SettingsDrawer({
                                       required
                                       value={assignHandle}
                                       onChange={(e) => setAssignHandle(e.target.value)}
-                                      placeholder="Tên @AI (vd: Nghiên_cứu)"
+                                      placeholder={t('handlePlaceholder')}
                                       className="px-2 py-1 rounded-md bg-[var(--surface)] border border-[var(--border)] text-[11.5px] text-[var(--ink)] focus:outline-none focus:border-[var(--accent)]"
                                     />
                                     <input
                                       type="text"
                                       value={assignRole}
                                       onChange={(e) => setAssignRole(e.target.value)}
-                                      placeholder="Vai trò cụ thể"
+                                      placeholder={t('roleNamePlaceholder')}
                                       className="px-2 py-1 rounded-md bg-[var(--surface)] border border-[var(--border)] text-[11.5px] text-[var(--ink)] focus:outline-none focus:border-[var(--accent)]"
                                     />
                                   </div>
@@ -1170,7 +1222,7 @@ export function SettingsDrawer({
                                   >
                                     {fallbackBridgeModels.map((m) => (
                                       <option key={m.id} value={m.id}>
-                                        Model: {m.label}
+                                        Model: {localizeModelLabel(m, lang)}
                                       </option>
                                     ))}
                                   </select>
@@ -1178,7 +1230,7 @@ export function SettingsDrawer({
                                     rows={2}
                                     value={assignPrompt}
                                     onChange={(e) => setAssignPrompt(e.target.value)}
-                                    placeholder="Chỉ dẫn vai trò cụ thể cho tài khoản này..."
+                                    placeholder={t('rolePromptPlaceholder')}
                                     className="w-full px-2 py-1 rounded-md bg-[var(--surface)] border border-[var(--border)] text-[11px] text-[var(--ink)] focus:outline-none focus:border-[var(--accent)] resize-none"
                                   />
                                   <div className="flex justify-end gap-1.5">
@@ -1187,13 +1239,13 @@ export function SettingsDrawer({
                                       onClick={() => setAssignLaneId(null)}
                                       className="px-2 py-1 rounded text-[11px] text-[var(--ink-muted)] hover:text-[var(--ink)] cursor-pointer"
                                     >
-                                      Hủy
+                                      {t('cancel')}
                                     </button>
                                     <button
                                       type="submit"
                                       className="px-2.5 py-1 rounded-md bg-[var(--accent)] text-[var(--accent-ink)] text-[11px] font-semibold cursor-pointer"
                                     >
-                                      Gán {lane.id} vào phòng
+                                      {t('pinAssignBtn', { id: lane.id })}
                                     </button>
                                   </div>
                                 </form>
@@ -1228,7 +1280,7 @@ export function SettingsDrawer({
               className="flex items-center gap-2 text-xs font-semibold text-[var(--ink)]"
             >
               <Scale className="w-4 h-4 text-[var(--accent)]" />
-              Model cho Trọng tài (Judge tổng hợp & chấm điểm)
+              {t('judgeModelLabel')}
             </label>
             <select
               id="judge-model-select"
@@ -1241,7 +1293,7 @@ export function SettingsDrawer({
             >
               {models.map((m) => (
                 <option key={`${m.providerId}::${m.id}`} value={`${m.providerId}::${m.id}`}>
-                  [{m.providerName}] {m.label}
+                  [{m.providerName}] {localizeModelLabel(m, lang)}
                 </option>
               ))}
             </select>
@@ -1252,7 +1304,7 @@ export function SettingsDrawer({
                   htmlFor="judge-lane-select"
                   className="block text-[11px] font-medium text-[var(--ink-secondary)]"
                 >
-                  Tài khoản Bridge (acc) riêng cho Trọng tài
+                  {t('judgeLaneLabel')}
                 </label>
                 <select
                   id="judge-lane-select"
@@ -1260,7 +1312,7 @@ export function SettingsDrawer({
                   onChange={(e) => onUpdateSettings({ judgeLaneId: e.target.value })}
                   className="w-full px-3 py-2 rounded-xl bg-[var(--bg)] border border-[var(--border)] text-xs text-[var(--ink)] focus:outline-none focus:border-[var(--accent)] cursor-pointer"
                 >
-                  <option value="">Tự động (Bridge tự chọn luồng rảnh)</option>
+                  <option value="">{t('judgeLaneAuto')}</option>
                   {laneDetails.map((l) => (
                     <option key={l.id} value={l.id}>
                       {l.id} — {l.name}
@@ -1270,7 +1322,7 @@ export function SettingsDrawer({
               </div>
             )}
             <p className="text-[11px] text-[var(--ink-muted)]">
-              Gợi ý: chọn <strong>4 Neon (Phân tích sâu hơn)</strong> cho Trọng tài để tổng hợp lập luận và bắt lỗ hổng sắc bén hơn.
+              {t('judgeModelHint')}
             </p>
           </section>
 
@@ -1282,10 +1334,10 @@ export function SettingsDrawer({
                 className="flex items-center gap-2 text-xs font-semibold text-[var(--ink)]"
               >
                 <Sliders className="w-4 h-4 text-[var(--accent)]" />
-                Luồng chạy song song (max_concurrency)
+                {t('concurrencyLabel')}
               </label>
               <span className="font-mono-num text-sm font-semibold text-[var(--accent)]">
-                {settings.maxConcurrency} luồng
+                {t('concurrencyThreads', { count: settings.maxConcurrency })}
               </span>
             </div>
             <input
@@ -1298,7 +1350,7 @@ export function SettingsDrawer({
               className="w-full accent-[var(--accent)] cursor-pointer"
             />
             <div className="flex justify-between text-[11px] font-mono-num text-[var(--ink-muted)]">
-              <span>1 (tuần tự)</span>
+              <span>{t('concurrencySeq')}</span>
               <span>2</span>
               <span>3</span>
               <span>4</span>
@@ -1308,7 +1360,11 @@ export function SettingsDrawer({
               <div className="p-2.5 rounded-lg bg-[var(--warn-soft)] text-[var(--warn)] text-xs flex items-start gap-2">
                 <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
                 <span>
-                  Bạn đang đặt {settings.maxConcurrency} luồng vượt quá {healthyWorkers}/{totalWorkers} luồng Bridge đã đăng nhập.
+                  {t('overSubscribedWarn', {
+                    max: settings.maxConcurrency,
+                    healthy: healthyWorkers,
+                    total: totalWorkers,
+                  })}
                 </span>
               </div>
             )}
@@ -1318,16 +1374,16 @@ export function SettingsDrawer({
           <section className="space-y-3">
             <div className="flex items-center gap-2 text-xs font-semibold text-[var(--ink)]">
               <ShieldCheck className="w-4 h-4 text-[var(--accent)]" />
-              Hành vi nghiên cứu & Trọng tài
+              {t('behaviorSectionTitle')}
             </div>
 
             <label className="flex items-start justify-between gap-3 p-3 rounded-xl bg-[var(--bg)] border border-[var(--border)] cursor-pointer">
               <div>
                 <div className="text-[13px] font-medium text-[var(--ink)]">
-                  Duyệt kế hoạch Deep Research
+                  {t('approveResearchTitle')}
                 </div>
                 <div className="text-[11.5px] text-[var(--ink-muted)] mt-0.5">
-                  Hiển thị từ khóa tìm nguồn arXiv/OpenAlex để bạn xác nhận trước khi chạy.
+                  {t('approveResearchDesc')}
                 </div>
               </div>
               <input
@@ -1341,16 +1397,49 @@ export function SettingsDrawer({
             <label className="flex items-start justify-between gap-3 p-3 rounded-xl bg-[var(--bg)] border border-[var(--border)] cursor-pointer">
               <div>
                 <div className="text-[13px] font-medium text-[var(--ink)]">
-                  Ẩn danh góc nhìn khi vào Trọng tài
+                  {t('anonymizeJudgeTitle')}
                 </div>
                 <div className="text-[11.5px] text-[var(--ink-muted)] mt-0.5">
-                  Che tên thật thành Ứng viên A/B/C để Trọng tài đánh giá khách quan.
+                  {t('anonymizeJudgeDesc')}
                 </div>
               </div>
               <input
                 type="checkbox"
                 checked={settings.anonymizeJudge}
                 onChange={(e) => onUpdateSettings({ anonymizeJudge: e.target.checked })}
+                className="mt-1 w-4 h-4 accent-[var(--accent)] cursor-pointer"
+              />
+            </label>
+
+            <label className="flex items-start justify-between gap-3 p-3 rounded-xl bg-[var(--bg)] border border-[var(--border)]">
+              <div>
+                <div className="text-[13px] font-medium text-[var(--ink)]">{t('judgeRunsTitle')}</div>
+                <div className="text-[11.5px] text-[var(--ink-muted)] mt-0.5">
+                  {t('judgeRunsDesc')}
+                </div>
+              </div>
+              <select
+                value={settings.judgeRuns ?? 2}
+                onChange={(e) => onUpdateSettings({ judgeRuns: Number(e.target.value) })}
+                className="mt-0.5 px-2 py-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[13px] text-[var(--ink)] cursor-pointer"
+              >
+                <option value={1}>{t('nRunsOption', { n: 1 })}</option>
+                <option value={2}>{t('nRunsOption', { n: 2 })}</option>
+                <option value={3}>{t('nRunsOption', { n: 3 })}</option>
+              </select>
+            </label>
+
+            <label className="flex items-start justify-between gap-3 p-3 rounded-xl bg-[var(--bg)] border border-[var(--border)] cursor-pointer">
+              <div>
+                <div className="text-[13px] font-medium text-[var(--ink)]">{t('claimCheckTitle')}</div>
+                <div className="text-[11.5px] text-[var(--ink-muted)] mt-0.5">
+                  {t('claimCheckDesc')}
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={settings.claimCheck ?? true}
+                onChange={(e) => onUpdateSettings({ claimCheck: e.target.checked })}
                 className="mt-1 w-4 h-4 accent-[var(--accent)] cursor-pointer"
               />
             </label>

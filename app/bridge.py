@@ -41,6 +41,24 @@ class AdapterResult:
     fallback_from: str | None = None
     retries: int = 0
     raw_prompt: str = ""
+    # Provenance: lane_source cho biết laneId lấy từ đâu ("gateway" = header X-Gateway-Lane của Bridge,
+    # "pinned" = luồng ghim, "api" = provider API, "unreported" = Bridge không báo lane thực tế).
+    lane_source: str = ""
+    provider_id: str = ""
+    provider_kind: str = ""
+    model_requested: str = ""
+
+    def provenance(self) -> dict[str, Any]:
+        return {
+            "providerId": self.provider_id,
+            "providerKind": self.provider_kind,
+            "modelRequested": self.model_requested,
+            "modelUsed": self.model_used,
+            "fallbackFrom": self.fallback_from,
+            "laneId": self.lane_id,
+            "laneSource": self.lane_source or "unreported",
+            "retries": self.retries,
+        }
 
 
 def compile_stateless_user_prompt(system_instruction: str, user_prompt: str) -> str:
@@ -541,7 +559,9 @@ class BridgeClient:
                             f"dsh-gemini-bridge trả lỗi HTTP {resp.status_code}: {raw_err[:220]}"
                         )
 
-                    lane_id = (resp.headers.get("x-gateway-lane") or clean_pin or "bridge").strip()
+                    header_lane = (resp.headers.get("x-gateway-lane") or "").strip()
+                    lane_id = (header_lane or clean_pin or "bridge").strip()
+                    lane_source = "gateway" if header_lane else ("pinned" if clean_pin else "unreported")
                     ctype = (resp.headers.get("content-type") or "").lower()
 
                     if "text/event-stream" in ctype:
@@ -687,6 +707,8 @@ class BridgeClient:
                             fallback_from=fallback_from,
                             retries=retries,
                             raw_prompt=combined_prompt,
+                            lane_source=lane_source,
+                            model_requested=requested_model,
                         )
 
                     # JSON non-SSE fallback (e.g. unit test MockTransport or direct JSON response)
@@ -731,6 +753,8 @@ class BridgeClient:
                         fallback_from=fallback_from,
                         retries=retries,
                         raw_prompt=combined_prompt,
+                        lane_source=lane_source,
+                        model_requested=requested_model,
                     )
                 finally:
                     await resp.aclose()

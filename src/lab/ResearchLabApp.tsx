@@ -23,6 +23,7 @@ import type {
   Perspective,
   PerspectivePreset,
   Room,
+  RoundKind,
   SourceItem,
   ThemeMode,
 } from '../types.ts';
@@ -60,6 +61,14 @@ import { SettingsDrawer } from './SettingsDrawer.tsx';
 import { ActiveLaneJob, GroupFeed } from './GroupFeed.tsx';
 import { Composer } from './Composer.tsx';
 import { AuditView, CompareView, ReportView } from './SecondaryViews.tsx';
+import {
+  isDefaultRoomTitle,
+  LanguageSelector,
+  localizeHandle,
+  localizeModelLabel,
+  localizeRoleName,
+  useI18n,
+} from '../utils/i18n.tsx';
 
 function buildConversationHistorySnapshot(messages: ChatMessage[]): ConversationHistoryItem[] {
   return messages
@@ -86,6 +95,7 @@ function buildConversationHistorySnapshot(messages: ChatMessage[]): Conversation
     }));
 }
 
+// Lưu ý §5.b: Hồ sơ tài liệu dưới đây là ngữ cảnh gửi cho AI đọc/trích dẫn [S#], giữ nguyên mẫu tiếng Việt.
 function buildSourcesDossierContent(sourcesList: SourceItem[], topic?: string): string {
   const header = topic
     ? `**Hồ sơ Tài liệu Nghiên cứu (${sourcesList.length} nguồn)** — Chủ đề: *${topic}*`
@@ -115,6 +125,7 @@ export function ResearchLabApp({
   onSwitchToFlowMap,
   initialRoomId,
 }: ResearchLabAppProps) {
+  const { lang, t } = useI18n();
   const [rooms, setRooms] = useState<Room[]>([]);
   const [activeRoomId, setActiveRoomId] = useState<string>(initialRoomId || '');
   const [loading, setLoading] = useState(true);
@@ -193,7 +204,7 @@ export function ResearchLabApp({
         setConnectError(null);
         setErrorBanner(null);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Không tải được dữ liệu phòng.';
+        const msg = err instanceof Error ? err.message : t('errLoadRooms');
         const isAuthOrRemote =
           (err instanceof ApiError && err.status === 401) ||
           isStaticPagesHost() ||
@@ -208,7 +219,7 @@ export function ResearchLabApp({
         setLoading(false);
       }
     },
-    [initialRoomId]
+    [initialRoomId, t]
   );
 
   // Load rooms, health, live models, and providers on mount
@@ -258,9 +269,9 @@ export function ResearchLabApp({
     try {
       await patchRoomApi(updated.id, updated);
     } catch (err) {
-      setErrorBanner(err instanceof Error ? err.message : 'Không lưu được thay đổi phòng.');
+      setErrorBanner(err instanceof Error ? err.message : t('errSaveRoom'));
     }
-  }, []);
+  }, [t]);
 
   const handleSelectRoom = (roomId: string) => {
     setActiveRoomId(roomId);
@@ -290,7 +301,7 @@ export function ResearchLabApp({
       setActiveRoomId(res.room.id);
       setViewTab('chat');
     } catch (err) {
-      setErrorBanner(err instanceof Error ? err.message : 'Không tạo được phòng mới.');
+      setErrorBanner(err instanceof Error ? err.message : t('errCreateRoom'));
     }
   };
 
@@ -313,7 +324,7 @@ export function ResearchLabApp({
         return next;
       });
     } catch (err) {
-      setErrorBanner(err instanceof Error ? err.message : 'Không xóa được phòng.');
+      setErrorBanner(err instanceof Error ? err.message : t('errDeleteRoom'));
     }
   };
 
@@ -373,7 +384,7 @@ export function ResearchLabApp({
     const newPreset: PerspectivePreset = {
       id: `preset-${Date.now()}`,
       name,
-      description: `Lưu từ phòng (${activeRoom.perspectives.length} góc nhìn)`,
+      description: t('savedPresetDesc', { count: activeRoom.perspectives.length }),
       perspectives: activeRoom.perspectives.map(({ id: _id, ...rest }) => rest),
     };
     const next = [...presets, newPreset];
@@ -400,10 +411,10 @@ export function ResearchLabApp({
         payload: {
           node_id: 'run_aborted',
           stage_index: 1,
-          stage_label: 'Đã dừng',
-          actor: { id: 'system', name: 'Người dùng dừng', colorIndex: 4, enabled: true, kind: 'output' },
+          stage_label: t('flowStageStopped'),
+          actor: { id: 'system', name: t('flowActorUserStop'), colorIndex: 4, enabled: true, kind: 'output' },
           inputs: [],
-          summary_1line: 'Người dùng đã chủ động dừng lượt chạy giữa chừng.',
+          summary_1line: t('flowAbortSummary'),
         },
       }).catch(() => {});
     }
@@ -416,6 +427,8 @@ export function ResearchLabApp({
     targets: Perspective[];
     round: number;
     roundLabel: string;
+    roundKind?: RoundKind;
+    roundCount?: number;
     peerMessages?: Array<{ handle: string; content: string }>;
     pattern: 'direct' | 'council' | 'debate' | 'research';
     includeUserMessage?: boolean;
@@ -426,6 +439,8 @@ export function ResearchLabApp({
       targets,
       round,
       roundLabel,
+      roundKind,
+      roundCount,
       peerMessages,
       pattern,
       includeUserMessage = true,
@@ -455,7 +470,7 @@ export function ResearchLabApp({
     let workingRoom: Room = {
       ...roomSnapshot,
       title:
-        roomSnapshot.messages.length === 0 && roomSnapshot.title.startsWith('Phòng mới')
+        roomSnapshot.messages.length === 0 && isDefaultRoomTitle(roomSnapshot.title)
           ? prompt.slice(0, 72)
           : roomSnapshot.title,
       messages: includeUserMessage
@@ -465,6 +480,8 @@ export function ResearchLabApp({
               id: `m-u-${Date.now()}`,
               round,
               roundLabel,
+              roundKind,
+              roundCount,
               senderType: 'user',
               content: prompt,
               citedSourceIds: [],
@@ -482,11 +499,15 @@ export function ResearchLabApp({
       payload: {
         node_id: `stage0_user_${runId}`,
         stage_index: 0,
-        stage_label: 'Đầu vào',
+        stage_label: t('flowStageInput'),
         pattern,
-        actor: { id: 'user', name: 'Bạn (Prompt)', colorIndex: 0, enabled: true, kind: 'user' },
+        actor: { id: 'user', name: t('flowActorUser'), colorIndex: 0, enabled: true, kind: 'user' },
         inputs: [],
-        summary_1line: `"${prompt.slice(0, 75)}" · Gửi tới ${targets.length}/${workingRoom.perspectives.length} AI`,
+        summary_1line: t('flowStartSummary', {
+          preview: prompt.slice(0, 75),
+          active: targets.length,
+          total: workingRoom.perspectives.length,
+        }),
         content: prompt,
         participants: workingRoom.perspectives.map((p) => ({
           id: p.id,
@@ -556,7 +577,7 @@ export function ResearchLabApp({
                 from_node_id: `stage0_user_${runId}`,
                 kind: 'prompt',
                 chars: prompt.length,
-                summary: `Câu hỏi gửi tới @${p.handle}`,
+                summary: t('flowPromptSentTo', { handle: localizeHandle(p.handle, lang) }),
                 source_ids: workingRoom.sources.map((s) => s.id),
               },
             ],
@@ -606,6 +627,8 @@ export function ResearchLabApp({
             id: `m-ai-${p.id}-${Date.now()}`,
             round,
             roundLabel,
+            roundKind,
+            roundCount,
             senderType: 'ai',
             perspectiveId: p.id,
             handle: p.handle,
@@ -619,6 +642,7 @@ export function ResearchLabApp({
             verification: result.verification,
             preserveFull: isDeepOrResearch,
             fallbackFrom: result.fallbackFrom,
+            provenance: result.provenance,
             createdAt: new Date().toISOString(),
           };
 
@@ -635,6 +659,7 @@ export function ResearchLabApp({
               : undefined,
             rawPrompt: result.rawPrompt,
             sourceIdsSeen: result.citedSourceIds,
+            provenance: result.provenance,
             timestamp: new Date().toISOString(),
           };
 
@@ -686,7 +711,7 @@ export function ResearchLabApp({
           );
         } catch (err) {
           if (controller.signal.aborted) break;
-          const msg = err instanceof Error ? err.message : 'Lỗi gọi góc nhìn AI.';
+          const msg = err instanceof Error ? err.message : t('errPerspectiveCall');
           setErrorBanner(`@${p.handle}: ${msg}`);
           setActiveJobs((prev) =>
             prev.map((j) => (j.perspectiveId === p.id ? { ...j, status: 'error' } : j))
@@ -725,15 +750,19 @@ export function ResearchLabApp({
         payload: {
           node_id: `stage2_output_${runId}`,
           stage_index: 2,
-          stage_label: 'Trả về Bạn',
-          actor: { id: 'output', name: 'Kết quả trả Bạn', colorIndex: 1, enabled: true, kind: 'output' },
+          stage_label: t('flowStageOutput'),
+          actor: { id: 'output', name: t('flowActorOutput'), colorIndex: 1, enabled: true, kind: 'output' },
           inputs: completedNodeIds.map((nid) => ({
             from_node_id: nid,
             kind: 'turn',
             chars: 640,
           })),
-          summary_1line: `Đã hoàn tất ${completedNodeIds.length}/${targets.length} góc nhìn cho ${roundLabel}.`,
-          content: 'Toàn bộ câu trả lời đã sẵn sàng đọc ở Giao diện 1.',
+          summary_1line: t('flowOutputSummary', {
+            done: completedNodeIds.length,
+            total: targets.length,
+            roundLabel,
+          }),
+          content: t('flowOutputContent'),
           transport: {
             lane_id: 'output',
             started_offset_s: Number(((Date.now() - runStartMs) / 1000).toFixed(1)),
@@ -766,6 +795,8 @@ export function ResearchLabApp({
         nextRound === 0
           ? `Vòng 0 · Trả lời độc lập (${targets.length})`
           : `Vòng ${nextRound} · Thảo luận tiếp (${targets.length})`,
+      roundKind: nextRound === 0 ? 'independent' : 'discuss',
+      roundCount: targets.length,
       pattern: targets.length >= 4 ? 'council' : 'direct',
     });
   };
@@ -780,10 +811,13 @@ export function ResearchLabApp({
     const nextRound = latestRound + 1;
     return runPerspectivesBatch({
       roomSnapshot,
+      // Lưu ý §5.b: Prompt phản biện gửi cho AI giữ ổn định tiếng Việt (backend ép AI trả lời theo ngôn ngữ người dùng).
       prompt: `Phản biện chéo các lập luận và tài liệu nghiên cứu ở Vòng ${latestRound} về chủ đề "${roomSnapshot.title}". Hãy trích dẫn mã [S#], chỉ rõ điểm đồng ý, điểm phản bác, kẽ hở số liệu và đề xuất điều chỉnh cụ thể.`,
       targets,
       round: nextRound,
       roundLabel: `Vòng ${nextRound} · Phản biện chéo (${targets.length})`,
+      roundKind: 'rebuttal',
+      roundCount: targets.length,
       pattern: 'debate',
       includeUserMessage: false,
     });
@@ -831,12 +865,15 @@ export function ResearchLabApp({
               handle: m.handle,
               perspectiveId: m.perspectiveId,
               laneId: m.laneId,
+              modelLabel: m.modelLabel,
               content: m.content,
               round: m.round,
             })),
           perspectives: roomSnapshot.perspectives,
           sources: roomSnapshot.sources,
           anonymize: settings.anonymizeJudge,
+          judgeRuns: settings.judgeRuns ?? 2,
+          claimCheck: settings.claimCheck ?? true,
           judgeModel: settings.judgeModel,
           judgeProviderId: settings.judgeProviderId,
           judgeLaneId:
@@ -871,11 +908,16 @@ export function ResearchLabApp({
         id: `m-judge-${Date.now()}`,
         round: nextRound,
         roundLabel: `Vòng ${nextRound} · Tổng hợp Trọng tài`,
+        roundKind: 'judge',
         senderType: 'judge',
         elapsedSec: res.elapsedSec,
         summary1Line: res.summary1Line,
         content: res.report.executiveSummary,
+        executiveSummaryCode: res.report.executiveSummaryCode ?? undefined,
         citedSourceIds: [],
+        modelLabel: res.modelUsed,
+        laneId: res.laneId,
+        provenance: res.provenance,
         createdAt: new Date().toISOString(),
       };
 
@@ -895,8 +937,8 @@ export function ResearchLabApp({
         payload: {
           node_id: `stage2_judge_${runId}`,
           stage_index: 2,
-          stage_label: 'Trọng tài',
-          actor: { id: 'judge', name: 'Trọng tài', colorIndex: 3, enabled: true, kind: 'judge' },
+          stage_label: t('flowStageJudge'),
+          actor: { id: 'judge', name: t('flowActorJudge'), colorIndex: 3, enabled: true, kind: 'judge' },
           inputs: res.report.rubric.map((r, i) => ({
             from_node_id: `stage1_${r.perspectiveId}`,
             kind: 'turn',
@@ -913,7 +955,7 @@ export function ResearchLabApp({
       return updated;
     } catch (err) {
       if (!controller.signal.aborted) {
-        setErrorBanner(err instanceof Error ? err.message : 'Lỗi chạy Trọng tài.');
+        setErrorBanner(err instanceof Error ? err.message : t('errJudgeRun'));
       }
       return roomSnapshot;
     } finally {
@@ -951,6 +993,7 @@ export function ResearchLabApp({
         : roomSnapshot.sources.map((s) => `[${s.id}]`).join(', ');
 
       const researchPrompt = newSources.length
+        // Lưu ý §5.b: Prompt mẫu Deep Research gửi cho AI giữ nguyên theo quy ước.
         ? `Deep Research: Dựa trên toàn bộ hồ sơ tài liệu vừa nạp (${sourceTags}), hãy in các điểm dữ liệu/bằng chứng cốt lõi và phân tích chuyên sâu câu hỏi: ${query}`
         : `Deep Research: Chưa tải thêm được nguồn mới từ thư viện mở; hãy phân tích chuyên sâu câu hỏi dựa trên kho nguồn hiện có${sourceTags ? ` (${sourceTags})` : ''}: ${query}`;
 
@@ -959,6 +1002,8 @@ export function ResearchLabApp({
           id: `m-u-${Date.now()}`,
           round: nextRound,
           roundLabel,
+          roundKind: 'deep_research',
+          roundCount: newSources.length,
           senderType: 'user',
           content: researchPrompt,
           citedSourceIds: [],
@@ -971,6 +1016,8 @@ export function ResearchLabApp({
           id: `m-sys-${Date.now() + 1}`,
           round: nextRound,
           roundLabel,
+          roundKind: 'deep_research',
+          roundCount: newSources.length,
           senderType: 'system',
           content: buildSourcesDossierContent(newSources, query),
           summary1Line: `Hồ sơ tài liệu ${newSources.length} nguồn (${sourceTags})`,
@@ -983,7 +1030,7 @@ export function ResearchLabApp({
       const updatedRoom: Room = {
         ...roomSnapshot,
         title:
-          roomSnapshot.messages.length === 0 && roomSnapshot.title.startsWith('Phòng mới')
+          roomSnapshot.messages.length === 0 && isDefaultRoomTitle(roomSnapshot.title)
             ? query.slice(0, 72)
             : roomSnapshot.title,
         sources: [...roomSnapshot.sources, ...newSources],
@@ -1003,6 +1050,8 @@ export function ResearchLabApp({
           targets,
           round: nextRound,
           roundLabel,
+          roundKind: 'deep_research',
+          roundCount: newSources.length,
           pattern: 'research',
           includeUserMessage: false,
         });
@@ -1010,7 +1059,7 @@ export function ResearchLabApp({
       return updatedRoom;
     } catch (err) {
       setIsBusy(false);
-      setErrorBanner(err instanceof Error ? err.message : 'Không tìm được nguồn Deep Research.');
+      setErrorBanner(err instanceof Error ? err.message : t('errDeepResearch'));
       return roomSnapshot;
     }
   };
@@ -1053,6 +1102,8 @@ export function ResearchLabApp({
       id: `m-sys-${Date.now()}`,
       round: nextRound,
       roundLabel: `Vòng ${nextRound} · Hồ sơ Tài liệu Kho nguồn (${activeRoom.sources.length})`,
+      roundKind: 'dossier',
+      roundCount: activeRoom.sources.length,
       senderType: 'system',
       content: buildSourcesDossierContent(activeRoom.sources),
       summary1Line: `Hồ sơ đầy đủ ${activeRoom.sources.length} nguồn từ Kho nguồn`,
@@ -1083,7 +1134,7 @@ export function ResearchLabApp({
       added = { ...res.item, id: nextId };
     } else if (payload.url) {
       const res = await searchResearchApi({ url: payload.url });
-      if (!res.items[0]) throw new Error('Không trích xuất được nội dung từ URL.');
+      if (!res.items[0]) throw new Error(t('errExtractUrl'));
       added = { ...res.items[0], id: nextId };
     } else {
       added = {
@@ -1095,6 +1146,8 @@ export function ResearchLabApp({
         contentLevel: 'excerpt',
         charCount: (payload.text || '').length,
         verified: true,
+        sourceType: 'user_excerpt',
+        retrieval: { provider: 'manual', retrievedAt: new Date().toISOString() },
         addedAt: new Date().toISOString(),
       };
     }
@@ -1122,13 +1175,13 @@ export function ResearchLabApp({
     if (health?.bridgeOffline) {
       return {
         tone: 'danger' as const,
-        text: 'Mất kết nối dsh-gemini-bridge (:10000). Kiểm tra máy chủ Bridge hoặc mở Cài đặt.',
+        text: t('alertBridgeOffline'),
       };
     }
     if (health?.guestMode) {
       return {
         tone: 'warn' as const,
-        text: 'Một số luồng Bridge chưa đăng nhập (Guest Mode) — bấm Mở Cài đặt để đăng nhập 1 lần hoặc Sync ngầm trực tiếp trên web.',
+        text: t('alertGuestMode'),
       };
     }
     const duplicatedLanes = (health?.laneDetails || [])
@@ -1137,13 +1190,16 @@ export function ResearchLabApp({
     if (duplicatedLanes.length > 0) {
       return {
         tone: 'warn' as const,
-        text: `Phát hiện ${duplicatedLanes.join(', ')} đang dùng trùng tài khoản Google — hãy mở Cài đặt và bấm Đổi acc để tách luồng độc lập.`,
+        text: t('alertDuplicateLanes', { lanes: duplicatedLanes.join(', ') }),
       };
     }
     if (health && health.healthyWorkers > 0 && settings.maxConcurrency > health.healthyWorkers) {
       return {
         tone: 'warn' as const,
-        text: `Đang đặt ${settings.maxConcurrency} luồng song song vượt quá ${health.healthyWorkers} worker khỏe — có thể chờ khóa tuần tự.`,
+        text: t('alertOverConcurrency', {
+          max: settings.maxConcurrency,
+          healthy: health.healthyWorkers,
+        }),
       };
     }
     return null;
@@ -1167,7 +1223,7 @@ export function ResearchLabApp({
   if (loading) {
     return (
       <div className="h-screen flex items-center justify-center bg-[var(--bg)] text-[var(--ink-secondary)] text-sm">
-        Đang mở Sổ tay Nghiên cứu…
+        {t('loadingNotebook')}
       </div>
     );
   }
@@ -1241,7 +1297,7 @@ export function ResearchLabApp({
               setLeftDefaultTab('rooms');
               setLeftOpen((v) => !v);
             }}
-            title="Thu/mở ngăn Phòng & Góc nhìn (phím [)"
+            title={t('toggleLeftTitle')}
             className={`p-2 rounded-lg transition-colors cursor-pointer ${
               leftOpen
                 ? 'bg-[var(--accent-soft)] text-[var(--accent)]'
@@ -1256,13 +1312,13 @@ export function ResearchLabApp({
         </div>
 
         {/* Zone 2: 4 Clean Single-Line View Tabs */}
-        <nav aria-label="Chế độ xem" className="hidden md:flex items-center gap-6 h-full">
+        <nav aria-label={t('navAriaLabel')} className="hidden md:flex items-center gap-6 h-full">
           {(
             [
-              { id: 'chat', label: 'Phòng chat' },
-              { id: 'compare', label: 'So sánh' },
-              { id: 'report', label: 'Báo cáo' },
-              { id: 'audit', label: 'Kiểm chứng' },
+              { id: 'chat', label: t('navChat') },
+              { id: 'compare', label: t('navCompare') },
+              { id: 'report', label: t('navReport') },
+              { id: 'audit', label: t('navAudit') },
             ] as const
           ).map((item) => {
             const active = viewTab === item.id;
@@ -1286,37 +1342,35 @@ export function ResearchLabApp({
           })}
         </nav>
 
-        {/* Zone 3: Open Flow Map + Theme Toggle + Settings + Right Drawer */}
+        {/* Zone 3: Flow Map + Language + Theme Toggle + Settings + Right Drawer */}
         <div className="flex items-center gap-1.5 shrink-0">
           <button
             type="button"
             onClick={() => onSwitchToFlowMap(activeRoom.id)}
-            title="Mở Giao diện 2: Bản đồ Luồng AI trực quan"
+            title={t('flowMapTitle')}
             className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent)] hover:text-[var(--accent-ink)] text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer"
           >
             Flow Map
             <ArrowUpRight className="w-3.5 h-3.5" />
           </button>
 
+          <LanguageSelector compact />
+
           <button
             type="button"
             onClick={onToggleTheme}
-            title={
-              theme === 'light'
-                ? 'Chuyển sang Tối Quái Dị (Nocturnal Oddity)'
-                : 'Chuyển sang Sáng ấm (Sổ tay Nghiên cứu)'
-            }
+            title={theme === 'light' ? t('themeToDarkTitle') : t('themeToLightTitle')}
             className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--bg)] hover:border-[var(--accent)] text-xs font-medium text-[var(--ink-secondary)] hover:text-[var(--ink)] transition-colors whitespace-nowrap cursor-pointer"
           >
             {theme === 'light' ? (
               <>
                 <Moon className="w-3.5 h-3.5" />
-                <span className="hidden xl:inline">Tối quái dị</span>
+                <span className="hidden xl:inline">{t('themeDarkLabel')}</span>
               </>
             ) : (
               <>
                 <Sun className="w-3.5 h-3.5 text-[var(--accent)]" />
-                <span className="hidden xl:inline">Sáng ấm</span>
+                <span className="hidden xl:inline">{t('themeLightLabel')}</span>
               </>
             )}
           </button>
@@ -1324,7 +1378,7 @@ export function ResearchLabApp({
           <button
             type="button"
             onClick={() => setSettingsOpen(true)}
-            title="Cài đặt luồng chạy & Bridge"
+            title={t('settingsTitle')}
             className="p-2 rounded-lg text-[var(--ink-secondary)] hover:bg-[var(--bg-subtle)] hover:text-[var(--ink)] transition-colors cursor-pointer"
           >
             <Settings className="w-4 h-4" />
@@ -1333,7 +1387,7 @@ export function ResearchLabApp({
           <button
             type="button"
             onClick={() => setRightOpen((v) => !v)}
-            title="Thu/mở Kho nguồn & Dàn ý sống (phím ])"
+            title={t('rightDrawerTitle')}
             className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
               rightOpen
                 ? 'bg-[var(--accent-soft)] text-[var(--accent)]'
@@ -1342,7 +1396,7 @@ export function ResearchLabApp({
           >
             <BookOpen className="w-4 h-4" />
             <span className="hidden sm:inline font-mono-num">
-              Nguồn ({activeRoom.sources.length})
+              {t('sourcesCountBtn', { count: activeRoom.sources.length })}
             </span>
           </button>
         </div>
@@ -1352,10 +1406,10 @@ export function ResearchLabApp({
       <div className="md:hidden flex items-center justify-around border-b border-[var(--border)] bg-[var(--surface)] px-2 py-1.5">
         {(
           [
-            { id: 'chat', label: 'Phòng chat' },
-            { id: 'compare', label: 'So sánh' },
-            { id: 'report', label: 'Báo cáo' },
-            { id: 'audit', label: 'Kiểm chứng' },
+            { id: 'chat', label: t('navChat') },
+            { id: 'compare', label: t('navCompare') },
+            { id: 'report', label: t('navReport') },
+            { id: 'audit', label: t('navAudit') },
           ] as const
         ).map((item) => (
           <button
@@ -1391,7 +1445,7 @@ export function ResearchLabApp({
             onClick={() => setSettingsOpen(true)}
             className="underline font-medium whitespace-nowrap cursor-pointer"
           >
-            Mở Cài đặt
+            {t('openSettings')}
           </button>
         </div>
       )}
@@ -1441,15 +1495,17 @@ export function ResearchLabApp({
               <div className="shrink-0 px-4 py-2 border-b border-[var(--border)] bg-[var(--surface)]/75 flex flex-wrap items-center justify-between gap-2 text-xs">
                 <div className="flex flex-wrap items-center gap-1.5 min-w-0">
                   <span className="text-[11px] font-medium text-[var(--ink-muted)] mr-0.5">
-                    Phân công AI:
+                    {t('aiRosterLabel')}
                   </span>
                   {activeRoom.perspectives
                     .filter((p) => p.enabled)
                     .map((p) => {
                       const color = getPerspectiveColorVar(p.colorIndex);
                       const accLabel = p.pinnedLaneId
-                        ? formatLaneDisplay(p.pinnedLaneId, health?.laneDetails)
+                        ? formatLaneDisplay(p.pinnedLaneId, health?.laneDetails, lang)
                         : '';
+                      const dispHandle = localizeHandle(p.handle, lang);
+                      const dispRole = localizeRoleName(p.name, lang);
                       return (
                         <button
                           key={p.id}
@@ -1458,14 +1514,17 @@ export function ResearchLabApp({
                             setLeftDefaultTab('roster');
                             setLeftOpen(true);
                           }}
-                          title={`Vai trò: ${p.name}${accLabel ? ` · Tài khoản: ${accLabel}` : ' · Tài khoản: Tự động'} — Bấm để sửa tên, vai trò, model hoặc chọn acc`}
+                          title={t('aiChipTitle', {
+                            name: dispRole,
+                            acc: accLabel ? t('accPinned', { acc: accLabel }) : t('accAuto'),
+                          })}
                           className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-[var(--border)] bg-[var(--bg)] hover:border-[var(--accent)] transition-colors cursor-pointer max-w-[330px]"
                         >
                           <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: color }} />
                           <span className="font-semibold shrink-0" style={{ color }}>
-                            @{p.handle}
+                            @{dispHandle}
                           </span>
-                          <span className="text-[var(--ink-secondary)] truncate">{p.name}</span>
+                          <span className="text-[var(--ink-secondary)] truncate">{dispRole}</span>
                           <span className="text-[10.5px] font-mono-num px-1.5 py-0.5 rounded bg-[var(--bg-subtle)] text-[var(--ink-muted)] shrink-0">
                             {p.modelLabel.replace(/^gemini-/, '')}
                           </span>
@@ -1483,16 +1542,16 @@ export function ResearchLabApp({
                     className="inline-flex items-center gap-1 px-2 py-1 rounded-full border border-dashed border-[var(--border-strong)] text-[11px] font-medium text-[var(--ink-secondary)] hover:text-[var(--accent)] hover:border-[var(--accent)] cursor-pointer"
                   >
                     <Plus className="w-3 h-3" />
-                    Thêm AI / Gán acc
+                    {t('addAiPinAcc')}
                   </button>
                 </div>
 
                 {/* Judge Model + Account quick picker */}
                 <div className="flex items-center gap-1.5 shrink-0">
                   <Scale className="w-3.5 h-3.5 text-[var(--accent)]" />
-                  <span className="text-[11px] text-[var(--ink-muted)]">Trọng tài:</span>
+                  <span className="text-[11px] text-[var(--ink-muted)]">{t('judgeLabel')}</span>
                   <select
-                    aria-label="Chọn model cho Trọng tài"
+                    aria-label={t('judgeModelAria')}
                     value={`${settings.judgeProviderId || 'bridge-local'}::${settings.judgeModel || 'gemini-neon'}`}
                     onChange={(e) => {
                       const [pid, mid] = e.target.value.split('::');
@@ -1503,25 +1562,25 @@ export function ResearchLabApp({
                     {(models.length > 0
                       ? models
                       : [
-                          { id: 'gemini-neon', label: '4 Neon — Phân tích sâu hơn', providerId: 'bridge-local', providerName: 'Bridge' },
-                          { id: 'gemini-carbon', label: '4 Carbon — Lập trình & Phức tạp', providerId: 'bridge-local', providerName: 'Bridge' },
-                          { id: 'gemini-4-hydrogen', label: '4 Hydrogen — Trợ giúp hằng ngày', providerId: 'bridge-local', providerName: 'Bridge' },
+                          { id: 'gemini-neon', label: t('model4NeonDesc'), providerId: 'bridge-local', providerName: 'Bridge' },
+                          { id: 'gemini-carbon', label: t('model4CarbonDesc'), providerId: 'bridge-local', providerName: 'Bridge' },
+                          { id: 'gemini-4-hydrogen', label: t('model4HydrogenDesc'), providerId: 'bridge-local', providerName: 'Bridge' },
                         ]
                     ).map((m) => (
                       <option key={`${m.providerId}::${m.id}`} value={`${m.providerId}::${m.id}`}>
-                        {m.label}
+                        {localizeModelLabel(m, lang)}
                       </option>
                     ))}
                   </select>
                   {(settings.judgeProviderId || 'bridge-local') === 'bridge-local' &&
                     (health?.laneDetails?.length || 0) > 0 && (
                       <select
-                        aria-label="Chọn tài khoản cho Trọng tài"
+                        aria-label={t('judgeAccAria')}
                         value={settings.judgeLaneId || ''}
                         onChange={(e) => updateSettings({ judgeLaneId: e.target.value })}
                         className="px-2 py-1 rounded-lg bg-[var(--bg)] border border-[var(--border)] text-[11.5px] font-mono-num text-[var(--ink)] focus:outline-none focus:border-[var(--accent)] cursor-pointer max-w-[140px]"
                       >
-                        <option value="">Acc: Tự động</option>
+                        <option value="">{t('accAutoOption')}</option>
                         {health?.laneDetails?.map((l) => (
                           <option key={l.id} value={l.id}>
                             {l.id} ({l.name})
@@ -1547,8 +1606,9 @@ export function ResearchLabApp({
                 }}
                 onPinToReport={handlePinToReport}
                 onAskRoleDirectly={(handle) => {
+                  const disp = localizeHandle(handle, lang);
                   setComposerText((prev) =>
-                    prev.includes(`@${handle}`) ? prev : `@${handle} ${prev}`.trimStart()
+                    prev.includes(`@${disp}`) ? prev : `@${disp} ${prev}`.trimStart()
                   );
                 }}
                 onComparePerspective={(pid) => {

@@ -11,8 +11,10 @@ import type {
   ReportData,
   Room,
   SourceItem,
+  TurnProvenance,
   TurnVerification,
 } from '../types.ts';
+import { getStoredUiLanguage, translate } from './i18n.tsx';
 
 const REMOTE_API_KEY = 'lab_remote_backend_url';
 const REMOTE_TOKEN_KEY = 'lab_remote_share_token';
@@ -175,7 +177,8 @@ async function parseJson<T>(res: Response): Promise<T> {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const errObj = data as { error?: string; code?: string };
-    const errMsg = errObj.error || `Lỗi máy chủ (HTTP ${res.status})`;
+    const errMsg =
+      errObj.error || translate(getStoredUiLanguage(), 'httpServerError', { status: res.status });
     throw new ApiError(errMsg, res.status, String(errObj.code || ''));
   }
   return data as T;
@@ -552,6 +555,7 @@ export async function runPerspectiveApi(
   fallbackFrom?: string;
   laneId: string;
   rawPrompt: string;
+  provenance?: TurnProvenance;
 }> {
   return postSseWithLiveness('/api/ai/perspective', payload, signal, onStatus);
 }
@@ -564,6 +568,7 @@ export async function runSynthesizeApi(
       handle?: string;
       perspectiveId?: string;
       laneId?: string;
+      modelLabel?: string;
       content: string;
       round: number;
     }>;
@@ -573,6 +578,8 @@ export async function runSynthesizeApi(
     judgeModel?: string;
     judgeProviderId?: string;
     judgeLaneId?: string;
+    judgeRuns?: number;
+    claimCheck?: boolean;
   },
   signal?: AbortSignal,
   onStatus?: (status: LiveStreamStatus) => void
@@ -584,6 +591,7 @@ export async function runSynthesizeApi(
   anonymizeUsed: boolean;
   laneId?: string;
   modelUsed?: string;
+  provenance?: TurnProvenance;
 }> {
   return postSseWithLiveness('/api/ai/synthesize', payload, signal, onStatus);
 }

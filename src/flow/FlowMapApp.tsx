@@ -25,6 +25,14 @@ import {
   GraphNode,
 } from './FlowCanvasSvg.tsx';
 import { SwimlaneView } from './SwimlaneView.tsx';
+import {
+  LanguageSelector,
+  localizeFlowActorName,
+  localizeFlowStageLabel,
+  localizeHandle,
+  localizeRoomTitle,
+  useI18n,
+} from '../utils/i18n.tsx';
 
 interface FlowMapAppProps {
   theme: ThemeMode;
@@ -44,6 +52,7 @@ export function FlowMapApp({
   onSwitchToLab,
   initialRoomId,
 }: FlowMapAppProps) {
+  const { lang, locale, t } = useI18n();
   const [rooms, setRooms] = useState<Room[]>([]);
   const [selectedRoomId, setSelectedRoomId] = useState<string>(initialRoomId || '');
   const [viewTab, setViewTab] = useState<FlowViewTab>('map');
@@ -157,7 +166,7 @@ export function FlowMapApp({
     [liveEvents, replayIndex]
   );
 
-  const graph = useMemo(() => buildGraphFromEvents(activeSlice), [activeSlice]);
+  const graph = useMemo(() => buildGraphFromEvents(activeSlice, lang), [activeSlice, lang]);
 
   const availableTags = useMemo(() => {
     const s = new Set<string>();
@@ -167,12 +176,17 @@ export function FlowMapApp({
 
   const currentStepLabel = useMemo(() => {
     const last = activeSlice[activeSlice.length - 1];
-    if (!last) return 'Chưa có sự kiện nào trong phòng này';
+    if (!last) return t('noEventsYet');
     const name = last.payload.actor.handle
-      ? `@${last.payload.actor.handle}`
-      : last.payload.actor.name;
-    return `Sự kiện ${activeSlice.length}/${liveEvents.length}: ${last.payload.stage_label} · ${name}`;
-  }, [activeSlice, liveEvents.length]);
+      ? `@${localizeHandle(last.payload.actor.handle, lang)}`
+      : localizeFlowActorName(last.payload.actor, lang);
+    return t('eventStepLabel', {
+      cur: activeSlice.length,
+      total: liveEvents.length,
+      stage: localizeFlowStageLabel(last.payload.stage_label, lang),
+      name,
+    });
+  }, [activeSlice, liveEvents.length, lang, t]);
 
   const handleTogglePlay = () => {
     if (liveEvents.length === 0) return;
@@ -201,25 +215,25 @@ export function FlowMapApp({
           </div>
 
           <select
-            aria-label="Chọn phòng để quan sát luồng"
+            aria-label={t('flowRoomAria')}
             value={selectedRoomId}
             onChange={(e) => setSelectedRoomId(e.target.value)}
             className="max-w-[200px] sm:max-w-[260px] px-2.5 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-xs font-medium text-[var(--ink)] truncate focus:outline-none focus:border-[var(--accent)] cursor-pointer"
           >
             {rooms.map((r) => (
               <option key={r.id} value={r.id}>
-                {r.title}
+                {localizeRoomTitle(r.title, lang)}
               </option>
             ))}
           </select>
         </div>
 
-        {/* Zone 2: Bản đồ Luồng | Làn thời gian */}
+        {/* Zone 2: Flow Map | Swimlane */}
         <nav className="hidden md:flex items-center gap-6 h-full">
           {(
             [
-              { id: 'map', label: 'Bản đồ Luồng' },
-              { id: 'swimlane', label: 'Làn thời gian' },
+              { id: 'map', label: t('flowTabMap') },
+              { id: 'swimlane', label: t('flowTabSwimlane') },
             ] as const
           ).map((tab) => {
             const active = viewTab === tab.id;
@@ -243,23 +257,25 @@ export function FlowMapApp({
           })}
         </nav>
 
-        {/* Zone 3: Theme switch + Back to Research Lab */}
+        {/* Zone 3: Language + Theme switch + Back to Research Lab */}
         <div className="flex items-center gap-2 shrink-0">
+          <LanguageSelector compact />
+
           <button
             type="button"
             onClick={onToggleTheme}
-            title="Chuyển đổi Sáng ấm ↔ Tối Quái Dị (đồng bộ cả 2 giao diện)"
+            title={t('flowThemeTitle')}
             className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--bg)] hover:border-[var(--accent)] text-xs font-medium text-[var(--ink-secondary)] hover:text-[var(--ink)] transition-colors whitespace-nowrap cursor-pointer"
           >
             {theme === 'light' ? (
               <>
                 <Moon className="w-3.5 h-3.5" />
-                <span className="hidden xl:inline">Tối quái dị</span>
+                <span className="hidden xl:inline">{t('themeDarkLabel')}</span>
               </>
             ) : (
               <>
                 <Sun className="w-3.5 h-3.5 text-[var(--accent)]" />
-                <span className="hidden xl:inline">Sáng ấm</span>
+                <span className="hidden xl:inline">{t('themeLightLabel')}</span>
               </>
             )}
           </button>
@@ -269,7 +285,7 @@ export function FlowMapApp({
             onClick={() => onSwitchToLab(selectedRoomId)}
             className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent)] hover:text-[var(--accent-ink)] text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer"
           >
-            Mở Phòng Chat
+            {t('openChatBtn')}
             <ArrowUpRight className="w-3.5 h-3.5" />
           </button>
         </div>
@@ -284,15 +300,15 @@ export function FlowMapApp({
               <div className="flex items-center gap-1 px-2 py-1 rounded-xl border border-[var(--border)] bg-[var(--surface)]/92 text-xs">
                 <Filter className="w-3.5 h-3.5 text-[var(--ink-muted)]" />
                 <select
-                  aria-label="Lọc theo nhóm tag"
+                  aria-label={t('filterTagAria')}
                   value={tagFilter}
                   onChange={(e) => setTagFilter(e.target.value)}
                   className="bg-transparent text-xs text-[var(--ink)] focus:outline-none cursor-pointer"
                 >
-                  <option value="all">Mọi #nhóm</option>
-                  {availableTags.map((t) => (
-                    <option key={t} value={t}>
-                      #{t}
+                  <option value="all">{t('filterAllTags')}</option>
+                  {availableTags.map((tg) => (
+                    <option key={tg} value={tg}>
+                      #{tg}
                     </option>
                   ))}
                 </select>
@@ -308,7 +324,7 @@ export function FlowMapApp({
               }`}
             >
               <Eye className="w-3.5 h-3.5" />
-              Chỉ hiện AI đang bật
+              {t('onlyEnabledAi')}
             </button>
           </div>
         )}
@@ -345,22 +361,22 @@ export function FlowMapApp({
         {/* Docked Right Inspector Drawer (never covers stage nodes) */}
         {inspector && (
           <aside
-            aria-label="Chi tiết nút hoặc luồng đang chọn"
+            aria-label={t('inspectorDrawerAria')}
             className="w-[340px] shrink-0 h-full border-l border-[var(--border)] bg-[var(--surface)] flex flex-col z-20 shadow-[var(--shadow-float)]"
           >
             <div className="px-4 py-3.5 border-b border-[var(--border)] flex items-start justify-between gap-2">
               <div className="min-w-0">
                 <div className="text-[11px] font-medium text-[var(--ink-muted)]">
-                  {inspector.type === 'edge' ? 'Luồng dữ liệu đang chọn' : 'Nút xử lý đang chọn'}
+                  {inspector.type === 'edge' ? t('inspectorEdge') : t('inspectorNode')}
                 </div>
                 <h3 className="font-display text-[15.5px] font-semibold text-[var(--ink)] mt-0.5 leading-snug">
                   {inspector.type === 'edge'
-                    ? `${inspector.fromNode.actor.handle ? `@${inspector.fromNode.actor.handle}` : inspector.fromNode.actor.name} → ${
-                        inspector.toNode.actor.handle ? `@${inspector.toNode.actor.handle}` : inspector.toNode.actor.name
+                    ? `${inspector.fromNode.actor.handle ? `@${localizeHandle(inspector.fromNode.actor.handle, lang)}` : localizeFlowActorName(inspector.fromNode.actor, lang)} → ${
+                        inspector.toNode.actor.handle ? `@${localizeHandle(inspector.toNode.actor.handle, lang)}` : localizeFlowActorName(inspector.toNode.actor, lang)
                       }`
                     : inspector.node.actor.handle
-                    ? `@${inspector.node.actor.handle}`
-                    : inspector.node.actor.name}
+                    ? `@${localizeHandle(inspector.node.actor.handle, lang)}`
+                    : localizeFlowActorName(inspector.node.actor, lang)}
                 </h3>
               </div>
               <button
@@ -379,36 +395,36 @@ export function FlowMapApp({
                     <div className="p-3 rounded-xl bg-[var(--accent-soft)] border border-[var(--accent)]/40 text-xs text-[var(--accent)] flex items-start gap-2">
                       <Shield className="w-4 h-4 shrink-0 mt-0.5" />
                       <span>
-                        Đã che tên thật thành <strong>{inspector.edge.anonymizedAs}</strong> trước khi truyền sang Trọng tài để đánh giá khách quan.
+                        {t('maskedAsNote', { alias: inspector.edge.anonymizedAs })}
                       </span>
                     </div>
                   )}
 
                   <div className="space-y-1.5">
                     <div className="text-xs font-semibold text-[var(--ink-secondary)]">
-                      Tóm tắt dữ liệu đã truyền
+                      {t('transferredSummary')}
                     </div>
                     <p className="text-[var(--ink)] leading-relaxed">
                       {inspector.edge.summary ||
                         inspector.fromNode.summary1Line ||
-                        'Truyền toàn bộ nội dung lập luận và trích dẫn liên quan sang chặng tiếp theo.'}
+                        t('transferredFallback')}
                     </p>
                   </div>
 
                   <div className="p-3 rounded-xl bg-[var(--bg)] border border-[var(--border)] space-y-1.5 text-xs">
                     <div className="flex justify-between">
-                      <span className="text-[var(--ink-muted)]">Loại truyền tin</span>
+                      <span className="text-[var(--ink-muted)]">{t('transferKind')}</span>
                       <span className="font-mono-num text-[var(--ink)]">{inspector.edge.kind}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-[var(--ink-muted)]">Độ dài ngữ cảnh</span>
+                      <span className="text-[var(--ink-muted)]">{t('contextLength')}</span>
                       <span className="font-mono-num text-[var(--ink)]">
-                        ~{inspector.edge.chars.toLocaleString('vi-VN')} ký tự
+                        {t('charsUnit', { chars: inspector.edge.chars.toLocaleString(locale) })}
                       </span>
                     </div>
                     {inspector.edge.sourceIds && inspector.edge.sourceIds.length > 0 && (
                       <div className="flex justify-between">
-                        <span className="text-[var(--ink-muted)]">Nguồn đính kèm</span>
+                        <span className="text-[var(--ink-muted)]">{t('attachedSources')}</span>
                         <span className="font-mono-num text-[var(--accent)]">
                           {inspector.edge.sourceIds.map((s) => `[${s}]`).join(' ')}
                         </span>
@@ -422,7 +438,7 @@ export function FlowMapApp({
                     className="w-full py-2 px-3 rounded-lg border border-[var(--border)] bg-[var(--bg)] hover:border-[var(--accent)] text-xs font-medium text-[var(--ink)] inline-flex items-center justify-center gap-1.5 cursor-pointer"
                   >
                     <Code2 className="w-3.5 h-3.5 text-[var(--accent)]" />
-                    {showRawDetails ? 'Ẩn văn bản đã gửi' : 'Xem toàn văn đã gửi'}
+                    {showRawDetails ? t('hideSentText') : t('viewSentText')}
                   </button>
 
                   {showRawDetails && (
@@ -448,16 +464,16 @@ export function FlowMapApp({
 
                   <div className="space-y-1.5">
                     <div className="text-xs font-semibold text-[var(--ink-secondary)]">
-                      Ý chính của nút ({inspector.node.stageLabel})
+                      {t('nodeKeyPoint', { stage: inspector.node.stageLabel })}
                     </div>
                     <p className="text-[var(--ink)] leading-relaxed">
-                      {inspector.node.summary1Line || 'Chưa có tóm tắt.'}
+                      {inspector.node.summary1Line || t('noSummaryYet')}
                     </p>
                   </div>
 
                   <div className="p-3 rounded-xl bg-[var(--bg)] border border-[var(--border)] space-y-1.5 text-xs">
                     <div className="flex justify-between">
-                      <span className="text-[var(--ink-muted)]">Trạng thái</span>
+                      <span className="text-[var(--ink-muted)]">{t('statusLabel')}</span>
                       <span
                         className="font-semibold"
                         style={{
@@ -470,17 +486,17 @@ export function FlowMapApp({
                         }}
                       >
                         {inspector.node.status === 'disabled'
-                          ? 'Tạm tắt (đứng ngoài)'
+                          ? t('statusDisabled')
                           : inspector.node.status === 'running'
-                          ? 'Đang xử lý'
+                          ? t('statusRunning')
                           : inspector.node.status === 'completed'
-                          ? 'Đã hoàn tất'
-                          : 'Gặp lỗi'}
+                          ? t('statusCompleted')
+                          : t('statusError')}
                       </span>
                     </div>
                     {inspector.node.laneId && (
                       <div className="flex justify-between">
-                        <span className="text-[var(--ink-muted)]">Worker Lane</span>
+                        <span className="text-[var(--ink-muted)]">{t('workerLaneLabel')}</span>
                         <span className="font-mono-num text-[var(--ink)]">
                           {inspector.node.laneId}
                         </span>
@@ -488,16 +504,16 @@ export function FlowMapApp({
                     )}
                     {inspector.node.elapsedSec !== undefined && (
                       <div className="flex justify-between">
-                        <span className="text-[var(--ink-muted)]">Thời gian xử lý</span>
+                        <span className="text-[var(--ink-muted)]">{t('elapsedLabel')}</span>
                         <span className="font-mono-num text-[var(--ink)]">
                           {inspector.node.elapsedSec.toFixed(1)}s
                         </span>
                       </div>
                     )}
                     <div className="flex justify-between">
-                      <span className="text-[var(--ink-muted)]">Đầu vào đã đọc</span>
+                      <span className="text-[var(--ink-muted)]">{t('inputsReadLabel')}</span>
                       <span className="font-mono-num text-[var(--ink)]">
-                        {inspector.node.inputs.length} luồng
+                        {t('streamsUnit', { count: inspector.node.inputs.length })}
                       </span>
                     </div>
                   </div>
@@ -505,7 +521,7 @@ export function FlowMapApp({
                   {inspector.node.inputs.length > 0 && (
                     <div className="space-y-1.5">
                       <div className="text-xs font-semibold text-[var(--ink-secondary)]">
-                        Danh sách nguồn/AI đã nhận vào
+                        {t('inputsListTitle')}
                       </div>
                       <ul className="space-y-1 text-xs text-[var(--ink-secondary)]">
                         {inspector.node.inputs.map((inp, i) => (
@@ -517,7 +533,7 @@ export function FlowMapApp({
                               {inp.anonymized_as || inp.from_node_id}
                             </span>
                             <span className="font-mono-num text-[11px] text-[var(--ink-muted)] shrink-0">
-                              {inp.chars} ký tự
+                              {t('charsUnit', { chars: inp.chars })}
                             </span>
                           </li>
                         ))}
@@ -531,7 +547,7 @@ export function FlowMapApp({
                     className="w-full py-2 px-3 rounded-lg border border-[var(--border)] bg-[var(--bg)] hover:border-[var(--accent)] text-xs font-medium text-[var(--ink)] inline-flex items-center justify-center gap-1.5 cursor-pointer"
                   >
                     <Code2 className="w-3.5 h-3.5 text-[var(--accent)]" />
-                    {showRawDetails ? 'Ẩn toàn văn & JSON sự kiện' : 'Xem toàn văn & JSON sự kiện'}
+                    {showRawDetails ? t('hideRawJson') : t('viewRawJson')}
                   </button>
 
                   {showRawDetails && (
@@ -564,7 +580,7 @@ export function FlowMapApp({
             className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-[var(--accent)] text-[var(--accent-ink)] text-xs font-semibold hover:bg-[var(--accent-hover)] whitespace-nowrap cursor-pointer"
           >
             {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-            {isPlaying ? 'Tạm dừng' : 'Phát lại'}
+            {isPlaying ? t('pauseBtn') : t('playBtn')}
           </button>
 
           <div className="inline-flex items-center rounded-lg border border-[var(--border)] bg-[var(--bg)] p-0.5">
@@ -575,7 +591,7 @@ export function FlowMapApp({
                 setIsLiveMode(false);
                 setReplayIndex((i) => Math.max(1, i - 1));
               }}
-              title="Lùi 1 bước"
+              title={t('stepBackTitle')}
               className="p-1.5 rounded-md text-[var(--ink-secondary)] hover:text-[var(--ink)] hover:bg-[var(--surface)] cursor-pointer"
             >
               <SkipBack className="w-3.5 h-3.5" />
@@ -587,7 +603,7 @@ export function FlowMapApp({
                 setIsLiveMode(false);
                 setReplayIndex((i) => Math.min(maxStep, i + 1));
               }}
-              title="Tiến 1 bước"
+              title={t('stepFwdTitle')}
               className="p-1.5 rounded-md text-[var(--ink-secondary)] hover:text-[var(--ink)] hover:bg-[var(--surface)] cursor-pointer"
             >
               <SkipForward className="w-3.5 h-3.5" />
@@ -613,9 +629,9 @@ export function FlowMapApp({
               <Radio className="w-3 h-3" />
               {isLiveMode
                 ? sseConnected
-                  ? 'Đang theo dõi LIVE'
+                  ? t('liveWatching')
                   : 'LIVE'
-                : 'Về LIVE'}
+                : t('backToLive')}
             </button>
           </div>
           <input
@@ -634,9 +650,9 @@ export function FlowMapApp({
 
         {/* Speed picker */}
         <div className="flex items-center gap-2 text-xs">
-          <span className="text-[var(--ink-muted)] hidden sm:inline">Tốc độ:</span>
+          <span className="text-[var(--ink-muted)] hidden sm:inline">{t('speedLabel')}</span>
           <select
-            aria-label="Tốc độ phát lại"
+            aria-label={t('speedLabel')}
             value={speed}
             onChange={(e) => setSpeed(Number(e.target.value))}
             className="px-2 py-1 rounded-lg border border-[var(--border)] bg-[var(--bg)] font-mono-num text-xs text-[var(--ink)] cursor-pointer"

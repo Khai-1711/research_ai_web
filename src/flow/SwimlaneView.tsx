@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import type { FlowGraphModel, GraphNode } from './FlowCanvasSvg.tsx';
 import { getPerspectiveColorVar } from '../utils/themeAndExport.ts';
+import { useI18n } from '../utils/i18n.tsx';
 
 interface SwimlaneViewProps {
   graph: FlowGraphModel;
@@ -10,6 +11,7 @@ interface SwimlaneViewProps {
 }
 
 export function SwimlaneView({ graph, selectedNodeId, onSelectNode }: SwimlaneViewProps) {
+  const { t } = useI18n();
   const { lanes, maxTime } = useMemo(() => {
     const activeNodes = graph.nodes.filter((n) => n.status !== 'disabled');
     const laneMap = new Map<string, GraphNode[]>();
@@ -55,26 +57,26 @@ export function SwimlaneView({ graph, selectedNodeId, onSelectNode }: SwimlaneVi
         <div className="flex flex-wrap items-end justify-between gap-3 pb-4 border-b border-[var(--border)]">
           <div>
             <h2 className="font-display text-xl font-semibold text-[var(--ink)]">
-              Làn thời gian theo Worker (Swimlane Timeline)
+              {t('swimlaneTitle')}
             </h2>
             <p className="text-xs text-[var(--ink-secondary)] mt-1">
-              Theo dõi chính xác các đợt chạy song song trên từng tài khoản (acc1..accN), thời điểm bắt đầu và độ trễ xử lý. Bấm vào bất kỳ thanh nào để mở chi tiết.
+              {t('swimlaneDesc')}
             </p>
           </div>
           <div className="font-mono-num text-xs text-[var(--ink-muted)]">
-            Tổng khung thời gian: 0s – {maxTime}s
+            {t('swimlaneTotalSpan', { max: maxTime })}
           </div>
         </div>
 
         {lanes.length === 0 ? (
           <div className="p-10 rounded-xl border border-dashed border-[var(--border-strong)] text-center text-sm text-[var(--ink-muted)]">
-            Chưa có dữ liệu làn chạy nào. Hãy gửi câu hỏi ở Phòng Chat để theo dõi thời gian thực từng luồng AI.
+            {t('swimlaneEmpty')}
           </div>
         ) : (
           <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow-card)] overflow-hidden">
             {/* Time ruler */}
             <div className="grid grid-cols-[120px_1fr] border-b border-[var(--border)] bg-[var(--bg-subtle)] text-[11px] font-mono-num text-[var(--ink-muted)]">
-              <div className="px-4 py-2.5 font-semibold">Lane / Worker</div>
+              <div className="px-4 py-2.5 font-semibold">{t('swimlaneWorkerCol')}</div>
               <div className="relative px-4 py-2.5">
                 {ticks.map((t) => (
                   <span

@@ -17,6 +17,8 @@ import {
 } from 'lucide-react';
 import type { Room } from '../types.ts';
 import { generateRoomMarkdown, triggerFileDownload } from '../utils/themeAndExport.ts';
+import { describeRetrieval, isWeakEvidenceSource, sourceTypeLabel } from '../utils/researchLabels.ts';
+import { useI18n } from '../utils/i18n.tsx';
 
 interface RightDrawerProps {
   open: boolean;
@@ -45,6 +47,7 @@ export function RightDrawer({
   onInjectSourcesToChat,
   isBusy,
 }: RightDrawerProps) {
+  const { lang, t } = useI18n();
   const [copiedMd, setCopiedMd] = useState(false);
   const [expandedSourceIds, setExpandedSourceIds] = useState<Record<string, boolean>>({});
   const sourceRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -61,7 +64,7 @@ export function RightDrawer({
   if (!open) return null;
 
   const handleCopyMd = async () => {
-    const md = generateRoomMarkdown(room);
+    const md = generateRoomMarkdown(room, lang);
     try {
       await navigator.clipboard.writeText(md);
       setCopiedMd(true);
@@ -72,7 +75,7 @@ export function RightDrawer({
   };
 
   const handleDownloadMd = () => {
-    triggerFileDownload(`${room.id}-report.md`, generateRoomMarkdown(room), 'text/markdown;charset=utf-8');
+    triggerFileDownload(`${room.id}-report.md`, generateRoomMarkdown(room, lang), 'text/markdown;charset=utf-8');
   };
 
   const handleDownloadJsonl = () => {
@@ -86,7 +89,7 @@ export function RightDrawer({
 
   return (
     <aside
-      aria-label="Ngăn Kho nguồn và Dàn ý sống"
+      aria-label={t('rightAriaLabel')}
       className="w-[320px] shrink-0 h-full flex flex-col border-l border-[var(--border)] bg-[var(--bg-subtle)] transition-all duration-200 z-20"
     >
       {/* Top segmented switch */}
@@ -102,7 +105,7 @@ export function RightDrawer({
             }`}
           >
             <BookOpen className="w-3.5 h-3.5" />
-            Kho nguồn ({room.sources.length})
+            {t('tabSources', { count: room.sources.length })}
           </button>
           <button
             type="button"
@@ -114,13 +117,13 @@ export function RightDrawer({
             }`}
           >
             <ListTree className="w-3.5 h-3.5" />
-            Dàn ý sống
+            {t('tabOutline')}
           </button>
         </div>
         <button
           type="button"
           onClick={onClose}
-          title="Ẩn ngăn phải (])"
+          title={t('hideRightTitle')}
           className="p-1.5 rounded-md text-[var(--ink-muted)] hover:text-[var(--ink)] hover:bg-[var(--surface)] transition-colors cursor-pointer"
         >
           <X className="w-4 h-4" />
@@ -132,9 +135,9 @@ export function RightDrawer({
         {activeTab === 'sources' ? (
           room.sources.length === 0 ? (
             <div className="p-4 rounded-xl border border-dashed border-[var(--border-strong)] text-center space-y-2 mt-2">
-              <p className="text-[13px] font-medium text-[var(--ink)]">Chưa có nguồn trích dẫn</p>
+              <p className="text-[13px] font-medium text-[var(--ink)]">{t('noSourcesTitle')}</p>
               <p className="text-xs text-[var(--ink-muted)] leading-relaxed">
-                Dùng nút <strong>Deep Research</strong> hoặc <strong>URL / Tài liệu</strong> ở khung nhập để nạp nguồn thật từ arXiv, OpenAlex, Wikipedia.
+                {t('noSourcesHint')}
               </p>
             </div>
           ) : (
@@ -147,7 +150,7 @@ export function RightDrawer({
                   className="w-full py-2 px-3 rounded-lg bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent)] hover:text-[var(--accent-ink)] text-xs font-medium flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer"
                 >
                   <MessageSquarePlus className="w-3.5 h-3.5" />
-                  In toàn bộ Kho nguồn vào Chat ({room.sources.length})
+                  {t('injectSourcesBtn', { count: room.sources.length })}
                 </button>
               )}
               {room.sources.map((src) => {
@@ -174,10 +177,10 @@ export function RightDrawer({
                         <span
                           title={
                             src.contentLevel === 'full_text'
-                              ? 'Nguồn đã trích xuất toàn văn / bài dài để AI đối chiếu sâu'
+                              ? t('levelFullTextTitle')
                               : src.contentLevel === 'abstract_only'
-                              ? 'Nguồn hiện chỉ mới có phần tóm tắt (Abstract)'
-                              : 'Nguồn trích đoạn / tổng quan'
+                              ? t('levelAbstractOnlyTitle')
+                              : t('levelExcerptTitle')
                           }
                           className={`px-1.5 py-0.2 rounded text-[10px] font-sans font-medium shrink-0 ${
                             src.contentLevel === 'full_text'
@@ -188,11 +191,28 @@ export function RightDrawer({
                           }`}
                         >
                           {src.contentLevel === 'full_text'
-                            ? 'Toàn văn'
+                            ? t('levelFullText')
                             : src.contentLevel === 'abstract_only'
-                            ? 'Chỉ Tóm tắt'
-                            : 'Trích đoạn'}
+                            ? t('levelAbstractOnly')
+                            : t('levelExcerpt')}
                         </span>
+                        {src.sourceType && (
+                          <span
+                            title={describeRetrieval(src, lang) || src.sourceType}
+                            className={`px-1.5 py-0.2 rounded text-[10px] font-sans font-medium shrink-0 ${
+                              isWeakEvidenceSource(src.sourceType)
+                                ? 'bg-[var(--warn-soft)] text-[var(--warn)]'
+                                : 'bg-[var(--bg-subtle)] text-[var(--ink-secondary)]'
+                            }`}
+                          >
+                            {sourceTypeLabel(src, lang)}
+                          </span>
+                        )}
+                        {typeof src.citedByCount === 'number' && (
+                          <span title={t('citationsCountTitle')} className="text-[10px] shrink-0">
+                            ↗{src.citedByCount}
+                          </span>
+                        )}
                       </div>
                       <div className="flex items-center gap-1.5 min-w-0">
                         <span className="truncate">{src.origin}</span>
@@ -201,7 +221,7 @@ export function RightDrawer({
                             type="button"
                             disabled={isBusy}
                             onClick={() => onDeleteSource(src.id)}
-                            title={`Xóa nguồn [${src.id}]`}
+                            title={t('deleteSourceTitle', { id: src.id })}
                             className="p-0.5 rounded text-[var(--ink-muted)] hover:text-[var(--danger)] transition-colors disabled:opacity-40 cursor-pointer shrink-0"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -229,12 +249,12 @@ export function RightDrawer({
                         {isExpanded ? (
                           <>
                             <ChevronUp className="w-3 h-3" />
-                            Thu gọn trích đoạn
+                            {t('collapseExcerpt')}
                           </>
                         ) : (
                           <>
                             <ChevronDown className="w-3 h-3" />
-                            Xem toàn văn ({src.excerpt.length} ký tự)
+                            {t('expandExcerpt', { chars: src.excerpt.length })}
                           </>
                         )}
                       </button>
@@ -260,12 +280,12 @@ export function RightDrawer({
             <section className="p-3.5 rounded-xl bg-[var(--surface)] border border-[var(--border)] space-y-2.5">
               <div className="flex items-center justify-between">
                 <h4 className="text-xs font-semibold text-[var(--ok)]">
-                  Điểm đồng thuận ({room.livingOutline.consensus.length})
+                  {t('consensusHeading', { count: room.livingOutline.consensus.length })}
                 </h4>
               </div>
               {room.livingOutline.consensus.length === 0 ? (
                 <p className="text-xs text-[var(--ink-muted)]">
-                  Bấm <strong>Trọng tài chốt</strong> sau khi thảo luận để tự động gom các điểm đồng thuận.
+                  {t('consensusEmpty')}
                 </p>
               ) : (
                 <ol className="space-y-2.5">
@@ -275,7 +295,8 @@ export function RightDrawer({
                         {idx + 1}. {item.title}
                       </div>
                       <div className="mt-0.5 text-[11.5px] text-[var(--ink-muted)]">
-                        Ủng hộ: {item.supporters.map((s) => `@${s}`).join(', ')}
+                        {t('supportersPrefix')}
+                        {item.supporters.map((s) => `@${s}`).join(', ')}
                         {item.citations.length > 0 && ` · ${item.citations.map((c) => `[${c}]`).join(' ')}`}
                       </div>
                     </li>
@@ -287,10 +308,10 @@ export function RightDrawer({
             {/* Contradictions */}
             <section className="p-3.5 rounded-xl bg-[var(--surface)] border border-[var(--border)] space-y-2.5">
               <h4 className="text-xs font-semibold text-[var(--warn)]">
-                Trục mâu thuẫn chính ({room.livingOutline.contradictions.length})
+                {t('contradictionsHeading', { count: room.livingOutline.contradictions.length })}
               </h4>
               {room.livingOutline.contradictions.length === 0 ? (
-                <p className="text-xs text-[var(--ink-muted)]">Chưa ghi nhận mâu thuẫn đáng kể.</p>
+                <p className="text-xs text-[var(--ink-muted)]">{t('contradictionsEmpty')}</p>
               ) : (
                 room.livingOutline.contradictions.map((c, idx) => (
                   <div key={idx} className="space-y-1.5 text-[12.5px] leading-relaxed">
@@ -302,7 +323,7 @@ export function RightDrawer({
                       className="inline-flex items-center gap-1.5 text-[12px] font-medium text-[var(--accent)] hover:underline cursor-pointer"
                     >
                       <Sparkles className="w-3.5 h-3.5" />
-                      Đưa thành câu hỏi phản biện
+                      {t('askContradiction')}
                     </button>
                   </div>
                 ))
@@ -312,10 +333,10 @@ export function RightDrawer({
             {/* Gaps */}
             <section className="p-3.5 rounded-xl bg-[var(--surface)] border border-[var(--border)] space-y-2.5">
               <h4 className="text-xs font-semibold text-[var(--ink)]">
-                Lỗ hổng cần tìm thêm ({room.livingOutline.gaps.length})
+                {t('gapsHeading', { count: room.livingOutline.gaps.length })}
               </h4>
               {room.livingOutline.gaps.length === 0 ? (
-                <p className="text-xs text-[var(--ink-muted)]">Chưa có lỗ hổng nào được đánh dấu.</p>
+                <p className="text-xs text-[var(--ink-muted)]">{t('gapsEmpty')}</p>
               ) : (
                 <>
                   <ul className="space-y-1.5 text-[12.5px] text-[var(--ink-secondary)] list-disc pl-4">
@@ -330,7 +351,7 @@ export function RightDrawer({
                     className="w-full py-2 px-3 rounded-lg bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[var(--accent)] hover:text-[var(--accent-ink)] text-xs font-medium flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer"
                   >
                     <Search className="w-3.5 h-3.5" />
-                    Tìm nguồn lấp {room.livingOutline.gaps.length} lỗ hổng này
+                    {t('fillGapsBtn', { count: room.livingOutline.gaps.length })}
                   </button>
                 </>
               )}
@@ -341,7 +362,7 @@ export function RightDrawer({
 
       {/* Quiet export bar */}
       <div className="p-3 border-t border-[var(--border)] bg-[var(--surface)]">
-        <div className="text-[11px] font-medium text-[var(--ink-muted)] mb-2">Xuất dữ liệu phiên</div>
+        <div className="text-[11px] font-medium text-[var(--ink-muted)] mb-2">{t('exportSectionTitle')}</div>
         <div className="grid grid-cols-3 gap-1.5">
           <button
             type="button"
@@ -349,7 +370,7 @@ export function RightDrawer({
             className="py-1.5 px-2 rounded-md border border-[var(--border)] bg-[var(--bg)] hover:border-[var(--accent)] text-[11.5px] font-medium text-[var(--ink)] flex items-center justify-center gap-1 transition-colors cursor-pointer"
           >
             {copiedMd ? <Check className="w-3 h-3 text-[var(--ok)]" /> : <Copy className="w-3 h-3" />}
-            {copiedMd ? 'Đã chép' : 'Copy MD'}
+            {copiedMd ? t('copiedBtn') : t('copyMdBtn')}
           </button>
           <button
             type="button"
