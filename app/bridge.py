@@ -39,6 +39,24 @@ class AdapterResult:
     fallback_from: str | None = None
     retries: int = 0
     raw_prompt: str = ""
+    # Provenance: lane_source cho biết laneId lấy từ đâu ("gateway" = header X-Gateway-Lane của Bridge,
+    # "pinned" = luồng ghim, "api" = provider API, "unreported" = Bridge không báo lane thực tế).
+    lane_source: str = ""
+    provider_id: str = ""
+    provider_kind: str = ""
+    model_requested: str = ""
+
+    def provenance(self) -> dict[str, Any]:
+        return {
+            "providerId": self.provider_id,
+            "providerKind": self.provider_kind,
+            "modelRequested": self.model_requested,
+            "modelUsed": self.model_used,
+            "fallbackFrom": self.fallback_from,
+            "laneId": self.lane_id,
+            "laneSource": self.lane_source or "unreported",
+            "retries": self.retries,
+        }
 
 
 def compile_stateless_user_prompt(system_instruction: str, user_prompt: str) -> str:
@@ -529,7 +547,9 @@ class BridgeClient:
                 if not content:
                     raise BridgeCallError("dsh-gemini-bridge trả về nội dung rỗng.")
 
-                lane_id = (resp.headers.get("x-gateway-lane") or clean_pin or "bridge").strip()
+                header_lane = (resp.headers.get("x-gateway-lane") or "").strip()
+                lane_id = (header_lane or clean_pin or "bridge").strip()
+                lane_source = "gateway" if header_lane else ("pinned" if clean_pin else "unreported")
                 actual_model = (
                     resp.headers.get("x-actual-model")
                     or data.get("model")
@@ -550,6 +570,8 @@ class BridgeClient:
                     fallback_from=fallback_from,
                     retries=retries,
                     raw_prompt=combined_prompt,
+                    lane_source=lane_source,
+                    model_requested=requested_model,
                 )
 
         raise BridgeCallError(last_error)

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useState } from 'react';
 import type { AppSurface, ThemeMode } from './types.ts';
 import {
   applyAndSaveTheme,
@@ -6,7 +6,11 @@ import {
   THEME_STORAGE_KEY,
 } from './utils/themeAndExport.ts';
 import { ResearchLabApp } from './lab/ResearchLabApp.tsx';
-import { FlowMapApp } from './flow/FlowMapApp.tsx';
+import { I18nProvider } from './utils/i18n.tsx';
+
+const LazyFlowMapApp = React.lazy(() =>
+  import('./flow/FlowMapApp.tsx').then((m) => ({ default: m.FlowMapApp }))
+);
 
 function readRouteFromLocation(): { surface: AppSurface; roomId?: string } {
   const path = window.location.pathname;
@@ -62,23 +66,25 @@ export default function App() {
     setRoute({ surface, roomId });
   }, []);
 
-  if (route.surface === 'flow') {
-    return (
-      <FlowMapApp
-        theme={theme}
-        onToggleTheme={toggleTheme}
-        onSwitchToLab={(roomId) => navigate('lab', roomId)}
-        initialRoomId={route.roomId}
-      />
-    );
-  }
-
   return (
-    <ResearchLabApp
-      theme={theme}
-      onToggleTheme={toggleTheme}
-      onSwitchToFlowMap={(roomId) => navigate('flow', roomId)}
-      initialRoomId={route.roomId}
-    />
+    <I18nProvider>
+      {route.surface === 'flow' ? (
+        <Suspense fallback={<div className="p-6 text-xs text-[var(--ink-muted)]">Loading Flow Map…</div>}>
+          <LazyFlowMapApp
+            theme={theme}
+            onToggleTheme={toggleTheme}
+            onSwitchToLab={(roomId) => navigate('lab', roomId)}
+            initialRoomId={route.roomId}
+          />
+        </Suspense>
+      ) : (
+        <ResearchLabApp
+          theme={theme}
+          onToggleTheme={toggleTheme}
+          onSwitchToFlowMap={(roomId) => navigate('flow', roomId)}
+          initialRoomId={route.roomId}
+        />
+      )}
+    </I18nProvider>
   );
 }

@@ -12,6 +12,14 @@ import {
 } from 'lucide-react';
 import type { LaneInfo, ModelOption, Perspective, PerspectivePreset, Room } from '../types.ts';
 import { getPerspectiveColorVar } from '../utils/themeAndExport.ts';
+import {
+  localizeHandle,
+  localizeModelLabel,
+  localizePreset,
+  localizeRoleName,
+  localizeRoomTitle,
+  useI18n,
+} from '../utils/i18n.tsx';
 
 interface LeftDrawerProps {
   open: boolean;
@@ -91,6 +99,7 @@ export function LeftDrawer({
   onOpenSettings,
   defaultTab = 'rooms',
 }: LeftDrawerProps) {
+  const { lang, t } = useI18n();
   const [tab, setTab] = useState<'rooms' | 'roster'>(defaultTab);
   useEffect(() => {
     setTab(defaultTab);
@@ -117,11 +126,11 @@ export function LeftDrawer({
   const effectiveModelOptions = useMemo<ModelOption[]>(() => {
     if (models.length > 0) return models;
     return [
-      { id: 'gemini-4-hydrogen', label: '4 Hydrogen — Trợ giúp hằng ngày', providerId: 'bridge-local', providerName: 'Bridge' },
-      { id: 'gemini-neon', label: '4 Neon — Phân tích sâu hơn', providerId: 'bridge-local', providerName: 'Bridge' },
-      { id: 'gemini-carbon', label: '4 Carbon — Lập trình & Phức tạp', providerId: 'bridge-local', providerName: 'Bridge' },
+      { id: 'gemini-4-hydrogen', label: t('model4HydrogenDesc'), providerId: 'bridge-local', providerName: 'Bridge' },
+      { id: 'gemini-neon', label: t('model4NeonDesc'), providerId: 'bridge-local', providerName: 'Bridge' },
+      { id: 'gemini-carbon', label: t('model4CarbonDesc'), providerId: 'bridge-local', providerName: 'Bridge' },
     ];
-  }, [models]);
+  }, [models, t]);
 
   const allTags = useMemo(() => {
     const set = new Set<string>();
@@ -160,7 +169,7 @@ export function LeftDrawer({
 
   return (
     <aside
-      aria-label="Ngăn Phòng và Đội hình AI"
+      aria-label={t('leftAriaLabel')}
       className="w-[300px] shrink-0 h-full flex flex-col border-r border-[var(--border)] bg-[var(--bg-subtle)] transition-all duration-200 z-20"
     >
       {/* Segmented tabs */}
@@ -176,7 +185,7 @@ export function LeftDrawer({
             }`}
           >
             <MessageSquare className="w-3.5 h-3.5" />
-            Phòng
+            {t('tabRooms')}
           </button>
           <button
             type="button"
@@ -188,13 +197,13 @@ export function LeftDrawer({
             }`}
           >
             <Users className="w-3.5 h-3.5" />
-            AI & Vai trò ({enabledCount}/{activeRoom.perspectives.length})
+            {t('tabRoster', { enabled: enabledCount, total: activeRoom.perspectives.length })}
           </button>
         </div>
         <button
           type="button"
           onClick={onClose}
-          title="Ẩn ngăn trái ([)"
+          title={t('hideLeftTitle')}
           className="p-1.5 rounded-md text-[var(--ink-muted)] hover:text-[var(--ink)] hover:bg-[var(--surface)] transition-colors cursor-pointer"
         >
           <X className="w-4 h-4" />
@@ -206,34 +215,37 @@ export function LeftDrawer({
         <div className="flex-1 overflow-y-auto px-3 pb-4 space-y-5">
           <div>
             <div className="px-1 mb-2 text-[12px] font-medium text-[var(--ink-muted)]">
-              Tạo phòng mới
+              {t('createNewRoom')}
             </div>
             <div className="space-y-1.5">
-              {presets.map((preset) => (
-                <button
-                  key={preset.id}
-                  type="button"
-                  onClick={() => onCreateRoomFromPreset(preset)}
-                  className="w-full text-left px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] hover:border-[var(--accent)] transition-colors group cursor-pointer"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-[13px] font-medium text-[var(--ink)] truncate">
-                      {preset.name}
-                    </span>
-                    <Plus className="w-3.5 h-3.5 text-[var(--ink-muted)] group-hover:text-[var(--accent)] shrink-0" />
-                  </div>
-                  <p className="text-[11.5px] text-[var(--ink-muted)] mt-0.5 line-clamp-1">
-                    {preset.description}
-                  </p>
-                </button>
-              ))}
+              {presets.map((preset) => {
+                const locPreset = localizePreset(preset, lang);
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => onCreateRoomFromPreset(preset)}
+                    className="w-full text-left px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] hover:border-[var(--accent)] transition-colors group cursor-pointer"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[13px] font-medium text-[var(--ink)] truncate">
+                        {locPreset.name}
+                      </span>
+                      <Plus className="w-3.5 h-3.5 text-[var(--ink-muted)] group-hover:text-[var(--accent)] shrink-0" />
+                    </div>
+                    <p className="text-[11.5px] text-[var(--ink-muted)] mt-0.5 line-clamp-1">
+                      {locPreset.description}
+                    </p>
+                  </button>
+                );
+              })}
             </div>
           </div>
 
           <div>
             <div className="px-1 mb-2 flex items-center justify-between">
               <span className="text-[12px] font-medium text-[var(--ink-muted)]">
-                Phòng gần đây ({rooms.length})
+                {t('recentRoomsCount', { count: rooms.length })}
               </span>
             </div>
             <div className="space-y-1.5">
@@ -273,7 +285,7 @@ export function LeftDrawer({
                             onClick={() => setRenamingRoomId(null)}
                             className="px-2 py-0.5 text-[11px] rounded text-[var(--ink-muted)] hover:text-[var(--ink)] cursor-pointer"
                           >
-                            Hủy
+                            {t('cancel')}
                           </button>
                           <button
                             type="button"
@@ -285,7 +297,7 @@ export function LeftDrawer({
                             }}
                             className="px-2 py-0.5 text-[11px] font-semibold rounded bg-[var(--accent)] text-[var(--accent-ink)] cursor-pointer"
                           >
-                            Lưu
+                            {t('save')}
                           </button>
                         </div>
                       </div>
@@ -297,15 +309,17 @@ export function LeftDrawer({
                           className="w-full text-left px-3 py-2.5 pr-14 cursor-pointer"
                         >
                           <div className="text-[13.5px] font-medium text-[var(--ink)] leading-snug line-clamp-2">
-                            {room.title}
+                            {localizeRoomTitle(room.title, lang)}
                           </div>
                           <div className="mt-1 flex items-center gap-1.5 text-[11.5px] text-[var(--ink-muted)] font-mono-num">
                             <span>
-                              {room.perspectives.length} AI
-                              {activeAi !== room.perspectives.length ? ` (bật ${activeAi})` : ''}
+                              {t('aiCountSuffix', { total: room.perspectives.length })}
+                              {activeAi !== room.perspectives.length
+                                ? t('enabledParen', { count: activeAi })
+                                : ''}
                             </span>
                             <span aria-hidden="true">·</span>
-                            <span>{room.sources.length} nguồn</span>
+                            <span>{t('sourcesCountShort', { count: room.sources.length })}</span>
                           </div>
                         </button>
                         <div className="absolute right-1.5 top-2 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -316,7 +330,7 @@ export function LeftDrawer({
                               setRenamingRoomId(room.id);
                               setRoomTitleDraft(room.title);
                             }}
-                            title="Đổi tên phòng"
+                            title={t('renameRoomTitle')}
                             className="p-1 rounded text-[var(--ink-muted)] hover:text-[var(--accent)] cursor-pointer"
                           >
                             <Edit3 className="w-3.5 h-3.5" />
@@ -328,7 +342,7 @@ export function LeftDrawer({
                                 e.stopPropagation();
                                 onDeleteRoom(room.id);
                               }}
-                              title="Xóa phòng"
+                              title={t('deleteRoomTitle')}
                               className="p-1 rounded text-[var(--ink-muted)] hover:text-[var(--danger)] cursor-pointer"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
@@ -372,10 +386,10 @@ export function LeftDrawer({
           <div className="space-y-2">
             <div className="px-1 flex items-center justify-between">
               <span className="text-[11.5px] font-medium text-[var(--ink-muted)]">
-                Vai trò & Model của từng AI trong phòng
+                {t('roleAndModelHeading')}
               </span>
               <span className="text-[11px] font-mono-num text-[var(--ink-muted)]">
-                {enabledCount}/{activeRoom.perspectives.length} bật
+                {t('enabledSlashTotal', { enabled: enabledCount, total: activeRoom.perspectives.length })}
               </span>
             </div>
 
@@ -418,14 +432,14 @@ export function LeftDrawer({
                         className="text-[13px] font-semibold truncate"
                         style={{ color: p.enabled ? color : 'var(--ink-secondary)' }}
                       >
-                        @{p.handle}
+                        @{localizeHandle(p.handle, lang)}
                       </span>
                     </button>
 
                     <div className="flex items-center gap-0.5 shrink-0">
                       <button
                         type="button"
-                        title="Đổi tên @AI, vai trò & chỉ dẫn"
+                        title={t('editRoleTitle')}
                         onClick={() => {
                           if (isEditing) {
                             setEditingId(null);
@@ -443,7 +457,7 @@ export function LeftDrawer({
                       {activeRoom.perspectives.length > 1 && (
                         <button
                           type="button"
-                          title="Xóa AI này khỏi phòng"
+                          title={t('deleteRoleTitle')}
                           onClick={() => onRemovePerspective(p.id)}
                           className="p-1 rounded text-[var(--ink-muted)] hover:text-[var(--danger)] cursor-pointer"
                         >
@@ -460,21 +474,21 @@ export function LeftDrawer({
                         type="text"
                         value={editHandle}
                         onChange={(e) => setEditHandle(e.target.value)}
-                        placeholder="Tên gọi @AI (vd: Nghiên_cứu, Code_Pro)"
+                        placeholder={t('handlePlaceholder')}
                         className="w-full px-2 py-1 text-xs rounded-md bg-[var(--bg)] border border-[var(--border)] text-[var(--ink)] font-semibold focus:outline-none focus:border-[var(--accent)]"
                       />
                       <input
                         type="text"
                         value={editName}
                         onChange={(e) => setEditName(e.target.value)}
-                        placeholder="Tên nhiệm vụ / vai trò"
+                        placeholder={t('roleNamePlaceholder')}
                         className="w-full px-2 py-1 text-xs rounded-md bg-[var(--bg)] border border-[var(--border)] text-[var(--ink)] focus:outline-none focus:border-[var(--accent)]"
                       />
                       <textarea
                         rows={3}
                         value={editPrompt}
                         onChange={(e) => setEditPrompt(e.target.value)}
-                        placeholder="Chỉ dẫn nhiệm vụ cụ thể cho AI này..."
+                        placeholder={t('rolePromptPlaceholder')}
                         className="w-full px-2 py-1 text-[11.5px] rounded-md bg-[var(--bg)] border border-[var(--border)] text-[var(--ink)] focus:outline-none focus:border-[var(--accent)] resize-none"
                       />
                       <div className="flex justify-end gap-1">
@@ -483,7 +497,7 @@ export function LeftDrawer({
                           onClick={() => setEditingId(null)}
                           className="px-2 py-0.5 text-[11px] rounded text-[var(--ink-muted)] hover:bg-[var(--bg-subtle)] cursor-pointer"
                         >
-                          Hủy
+                          {t('cancel')}
                         </button>
                         <button
                           type="button"
@@ -498,14 +512,14 @@ export function LeftDrawer({
                           }}
                           className="px-2.5 py-0.5 text-[11px] font-semibold rounded bg-[var(--accent)] text-[var(--accent-ink)] cursor-pointer"
                         >
-                          Lưu thay đổi
+                          {t('saveChanges')}
                         </button>
                       </div>
                     </div>
                   ) : (
                     <div className="space-y-0.5">
                       <div className="text-[12px] font-medium text-[var(--ink)] leading-snug">
-                        Vai trò: {p.name}
+                        {t('roleLabelPrefix')}{localizeRoleName(p.name, lang)}
                       </div>
                       <p className="text-[11px] text-[var(--ink-muted)] line-clamp-2 leading-relaxed">
                         {p.rolePrompt}
@@ -516,7 +530,7 @@ export function LeftDrawer({
                   {/* Model + Bridge Account (acc1/acc2/acc3) selectors right on each AI card */}
                   <div className="pt-0.5 space-y-1.5">
                     <select
-                      aria-label={`Chọn model cho @${p.handle}`}
+                      aria-label={`Model @${p.handle}`}
                       value={currentKey}
                       onChange={(e) => {
                         const [pid, mid] = e.target.value.split('::');
@@ -530,19 +544,19 @@ export function LeftDrawer({
                     >
                       {!hasOption && (
                         <option value={currentKey}>
-                          [Hiện tại] {p.modelLabel}
+                          {t('currentModelPrefix')}{p.modelLabel}
                         </option>
                       )}
                       {effectiveModelOptions.map((m) => (
                         <option key={`${m.providerId}::${m.id}`} value={`${m.providerId}::${m.id}`}>
-                          [{m.providerName}] {m.label}
+                          [{m.providerName}] {localizeModelLabel(m, lang)}
                         </option>
                       ))}
                     </select>
 
                     {currentProv === 'bridge-local' && laneDetails.length > 0 && (
                       <select
-                        aria-label={`Chọn tài khoản Bridge cho @${p.handle}`}
+                        aria-label={`Account @${p.handle}`}
                         value={p.pinnedLaneId || ''}
                         onChange={(e) =>
                           onUpdatePerspective(p.id, {
@@ -551,10 +565,10 @@ export function LeftDrawer({
                         }
                         className="w-full px-2 py-1.5 rounded-lg bg-[var(--bg)] border border-[var(--border)] text-[11.5px] text-[var(--ink)] focus:outline-none focus:border-[var(--accent)] cursor-pointer"
                       >
-                        <option value="">Tài khoản: Tự động (Bridge chia tải)</option>
+                        <option value="">{t('accAutoBridge')}</option>
                         {laneDetails.map((l) => (
                           <option key={l.id} value={l.id}>
-                            Tài khoản: {l.id} — {l.name}
+                            {t('accPrefix', { id: l.id, name: l.name })}
                           </option>
                         ))}
                       </select>
@@ -571,32 +585,42 @@ export function LeftDrawer({
               onSubmit={handleAddRoleSubmit}
               className="p-3 rounded-xl border border-[var(--accent)]/60 bg-[var(--surface)] space-y-2.5"
             >
-              <div className="text-xs font-semibold text-[var(--ink)]">Thêm 1 luồng AI vào phòng</div>
+              <div className="text-xs font-semibold text-[var(--ink)]">{t('addAiHeading')}</div>
 
               {/* Quick role templates */}
               <div className="flex flex-wrap gap-1">
-                {ROLE_TEMPLATES.map((tpl) => (
-                  <button
-                    key={tpl.handle}
-                    type="button"
-                    onClick={() => {
-                      setNewHandle(tpl.handle);
-                      setNewName(tpl.name);
-                      setNewTag(tpl.tag);
-                      setNewRolePrompt(tpl.prompt);
-                    }}
-                    className="px-2 py-0.5 rounded-md bg-[var(--bg)] border border-[var(--border)] text-[10.5px] text-[var(--ink-secondary)] hover:border-[var(--accent)] hover:text-[var(--ink)] cursor-pointer"
-                  >
-                    + {tpl.label}
-                  </button>
-                ))}
+                {ROLE_TEMPLATES.map((tpl) => {
+                  const labelKey =
+                    tpl.handle === 'Nghiên_cứu'
+                      ? 'tplAcademic'
+                      : tpl.handle === 'Kỹ_thuật'
+                      ? 'tplTech'
+                      : tpl.handle === 'Phản_biện'
+                      ? 'tplCritic'
+                      : 'tplCost';
+                  return (
+                    <button
+                      key={tpl.handle}
+                      type="button"
+                      onClick={() => {
+                        setNewHandle(tpl.handle);
+                        setNewName(tpl.name);
+                        setNewTag(tpl.tag);
+                        setNewRolePrompt(tpl.prompt);
+                      }}
+                      className="px-2 py-0.5 rounded-md bg-[var(--bg)] border border-[var(--border)] text-[10.5px] text-[var(--ink-secondary)] hover:border-[var(--accent)] hover:text-[var(--ink)] cursor-pointer"
+                    >
+                      + {t(labelKey)}
+                    </button>
+                  );
+                })}
               </div>
 
               <input
                 type="text"
                 value={newHandle}
                 onChange={(e) => setNewHandle(e.target.value)}
-                placeholder="Tên gọi (vd: Nghiên_cứu, Phản_biện)"
+                placeholder={t('quickHandlePlaceholder')}
                 className="w-full px-2.5 py-1.5 text-xs rounded-md bg-[var(--bg)] border border-[var(--border)] text-[var(--ink)] focus:outline-none focus:border-[var(--accent)]"
                 required
               />
@@ -604,7 +628,7 @@ export function LeftDrawer({
                 type="text"
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
-                placeholder="Nhiệm vụ cụ thể (vd: Đọc bài báo & trích dẫn)"
+                placeholder={t('quickNamePlaceholder')}
                 className="w-full px-2.5 py-1.5 text-xs rounded-md bg-[var(--bg)] border border-[var(--border)] text-[var(--ink)] focus:outline-none focus:border-[var(--accent)]"
               />
               <select
@@ -614,7 +638,7 @@ export function LeftDrawer({
               >
                 {effectiveModelOptions.map((m) => (
                   <option key={`${m.providerId}::${m.id}`} value={`${m.providerId}::${m.id}`}>
-                    [{m.providerName}] {m.label}
+                    [{m.providerName}] {localizeModelLabel(m, lang)}
                   </option>
                 ))}
               </select>
@@ -625,10 +649,10 @@ export function LeftDrawer({
                   onChange={(e) => setNewPinnedLaneId(e.target.value)}
                   className="w-full px-2.5 py-1.5 text-xs rounded-md bg-[var(--bg)] border border-[var(--border)] text-[var(--ink)] focus:outline-none focus:border-[var(--accent)] cursor-pointer"
                 >
-                  <option value="">Tài khoản: Tự động (Bridge chia tải)</option>
+                  <option value="">{t('accAutoBridge')}</option>
                   {laneDetails.map((l) => (
                     <option key={l.id} value={l.id}>
-                      Ghim riêng: {l.id} — {l.name}
+                      {t('pinPrefix', { id: l.id, name: l.name })}
                     </option>
                   ))}
                 </select>
@@ -637,7 +661,7 @@ export function LeftDrawer({
                 rows={2}
                 value={newRolePrompt}
                 onChange={(e) => setNewRolePrompt(e.target.value)}
-                placeholder="Chỉ dẫn vai trò cụ thể cho AI này..."
+                placeholder={t('rolePromptPlaceholder')}
                 className="w-full px-2.5 py-1.5 text-xs rounded-md bg-[var(--bg)] border border-[var(--border)] text-[var(--ink)] focus:outline-none focus:border-[var(--accent)] resize-none"
               />
               <div className="flex items-center justify-end gap-1.5">
@@ -646,13 +670,13 @@ export function LeftDrawer({
                   onClick={() => setShowAddRole(false)}
                   className="px-2.5 py-1 text-xs rounded-md text-[var(--ink-secondary)] hover:bg-[var(--bg-subtle)] cursor-pointer"
                 >
-                  Hủy
+                  {t('cancel')}
                 </button>
                 <button
                   type="submit"
                   className="px-3 py-1 text-xs font-medium rounded-md bg-[var(--accent)] text-[var(--accent-ink)] hover:bg-[var(--accent-hover)] cursor-pointer"
                 >
-                  Thêm luồng AI
+                  {t('addAiSubmit')}
                 </button>
               </div>
             </form>
@@ -664,7 +688,7 @@ export function LeftDrawer({
                 className="w-full py-2 px-3 rounded-lg border border-dashed border-[var(--border-strong)] text-xs font-medium text-[var(--ink-secondary)] hover:text-[var(--accent)] hover:border-[var(--accent)] flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" />
-                Thêm 1 luồng AI vào phòng
+                {t('addAiHeading')}
               </button>
               <button
                 type="button"
@@ -672,19 +696,19 @@ export function LeftDrawer({
                 className="w-full py-2 px-3 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-xs font-medium text-[var(--ink-secondary)] hover:text-[var(--ink)] hover:border-[var(--accent)] flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
               >
                 <Settings className="w-3.5 h-3.5" />
-                Nạp thêm nguồn AI (API Key / Bridge)
+                {t('addAiProviderBtn')}
               </button>
               <button
                 type="button"
                 onClick={() => {
-                  onSavePreset(`Bộ ${activeRoom.perspectives.length} AI · ${activeRoom.title.slice(0, 18)}`);
+                  onSavePreset(`${activeRoom.perspectives.length} AI · ${activeRoom.title.slice(0, 18)}`);
                   setPresetSavedNotice(true);
                   setTimeout(() => setPresetSavedNotice(false), 2000);
                 }}
                 className="w-full py-2 px-3 rounded-lg bg-[var(--surface)] border border-[var(--border)] text-xs font-medium text-[var(--ink-secondary)] hover:text-[var(--ink)] flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
               >
                 <BookmarkPlus className="w-3.5 h-3.5" />
-                {presetSavedNotice ? 'Đã lưu làm mẫu phòng!' : 'Lưu đội hình làm mẫu'}
+                {presetSavedNotice ? t('presetSaved') : t('savePresetBtn')}
               </button>
             </div>
           )}

@@ -19,6 +19,17 @@ import {
   triggerFileDownload,
 } from '../utils/themeAndExport.ts';
 import { MarkdownText } from './MarkdownText.tsx';
+import { countInlineCitations } from '../utils/citations.ts';
+import { describeRetrieval, formatClaimCounts, isWeakEvidenceSource, sourceTypeLabel } from '../utils/researchLabels.ts';
+import {
+  formatBreakdownSummary,
+  formatExecutiveSummary,
+  formatReportSubtitle,
+  formatReportTitle,
+  formatStructuredWarning,
+  localizeHandle,
+  useI18n,
+} from '../utils/i18n.tsx';
 
 /* ============================================================================
    1. COMPARE VIEW — Select any 2, 3, or 4 perspectives side-by-side
@@ -37,6 +48,7 @@ export function CompareView({
   onCitationClick,
   onAskRole,
 }: CompareViewProps) {
+  const { lang, t } = useI18n();
   const defaultIds = useMemo(() => {
     if (initialSelectedIds.length >= 2) return initialSelectedIds.slice(0, 4);
     const enabled = room.perspectives.filter((p) => p.enabled).map((p) => p.id);
@@ -82,7 +94,7 @@ export function CompareView({
         {/* Controls bar */}
         <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-[var(--border)]">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs font-medium text-[var(--ink-secondary)]">Đang so sánh:</span>
+            <span className="text-xs font-medium text-[var(--ink-secondary)]">{t('comparingLabel')}</span>
             {selectedIds.map((pid, idx) => (
               <div key={`${pid}-${idx}`} className="inline-flex items-center gap-1">
                 <select
@@ -92,7 +104,9 @@ export function CompareView({
                 >
                   {room.perspectives.map((p) => (
                     <option key={p.id} value={p.id}>
-                      {blindMode ? `Ứng viên ${String.fromCharCode(65 + idx)}` : `@${p.handle}`}
+                      {blindMode
+                        ? t('candidatePrefix', { letter: String.fromCharCode(65 + idx) })
+                        : `@${localizeHandle(p.handle, lang)}`}
                     </option>
                   ))}
                 </select>
@@ -100,7 +114,7 @@ export function CompareView({
                   <button
                     type="button"
                     onClick={() => handleRemoveCol(idx)}
-                    title="Bỏ cột này"
+                    title={t('removeColTitle')}
                     className="p-1 text-[var(--ink-muted)] hover:text-[var(--danger)] cursor-pointer"
                   >
                     <X className="w-3.5 h-3.5" />
@@ -115,7 +129,7 @@ export function CompareView({
                 className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-dashed border-[var(--border-strong)] text-xs font-medium text-[var(--accent)] hover:bg-[var(--accent-soft)] cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" />
-                Thêm cột
+                {t('addCol')}
               </button>
             )}
           </div>
@@ -128,7 +142,7 @@ export function CompareView({
             >
               {rounds.map((r) => (
                 <option key={r} value={r}>
-                  Vòng {r}
+                  {t('roundN', { round: r })}
                 </option>
               ))}
             </select>
@@ -143,7 +157,7 @@ export function CompareView({
               }`}
             >
               {blindMode ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-              Ẩn danh: {blindMode ? 'BẬT' : 'TẮT'}
+              {t('blindModeLabel', { state: blindMode ? t('onBadge') : t('offBadge') })}
             </button>
           </div>
         </div>
@@ -158,7 +172,9 @@ export function CompareView({
                 (m) => m.senderType === 'ai' && m.perspectiveId === p.id && m.round === selectedRound
               ) || room.messages.find((m) => m.senderType === 'ai' && m.perspectiveId === p.id);
 
-            const label = blindMode ? `Ứng viên ${String.fromCharCode(65 + idx)}` : `@${p.handle}`;
+            const label = blindMode
+              ? t('candidatePrefix', { letter: String.fromCharCode(65 + idx) })
+              : `@${localizeHandle(p.handle, lang)}`;
             const color = blindMode ? 'var(--accent)' : getPerspectiveColorVar(p.colorIndex);
 
             return (
@@ -174,7 +190,7 @@ export function CompareView({
                     <span className="text-[11.5px] font-mono-num text-[var(--ink-muted)]">
                       {msg
                         ? `${msg.laneId ?? 'acc1'} · ${msg.elapsedSec?.toFixed(1) ?? '0.0'}s`
-                        : 'Chưa có bài trả lời'}
+                        : t('noReplyYet')}
                     </span>
                   </div>
 
@@ -186,7 +202,7 @@ export function CompareView({
                     />
                   ) : (
                     <p className="text-sm text-[var(--ink-muted)] py-8 text-center">
-                      Góc nhìn này chưa tham gia Vòng {selectedRound}.
+                      {t('roleNotInRound', { round: selectedRound })}
                     </p>
                   )}
                 </div>
@@ -199,7 +215,7 @@ export function CompareView({
                       className="inline-flex items-center gap-1.5 text-xs font-medium text-[var(--accent)] hover:underline cursor-pointer"
                     >
                       <MessageSquarePlus className="w-3.5 h-3.5" />
-                      Hỏi tiếp vai @{p.handle}
+                      {t('askFollowUpRole', { handle: localizeHandle(p.handle, lang) })}
                     </button>
                   </div>
                 )}
@@ -231,24 +247,16 @@ export function ReportView({
   onBackToChat,
   onCitationClick,
 }: ReportViewProps) {
+  const { lang, t } = useI18n();
   const validSourceIds = useMemo(() => new Set(room.sources.map((s) => s.id)), [room.sources]);
 
   const citationStats = useMemo(() => {
-    let totalFound = 0;
-    let validCount = 0;
-    let inferredCount = 0;
     const allText = [
       room.report?.executiveSummary ?? '',
       ...room.messages.map((m) => m.content),
     ].join('\n');
-    const matches = allText.match(/\[S\d+\]/g) ?? [];
-    for (const m of matches) {
-      totalFound++;
-      if (validSourceIds.has(m.slice(1, -1))) validCount++;
-    }
-    const infMatches =
-      allText.match(/\[\s*(?:Suy\s+luận\s+từ|Inference\s+from)\s+S\d+\s*\]/gi) ?? [];
-    inferredCount = infMatches.length;
+    const { totalFound, validCount, inferredCount } = countInlineCitations(allText, validSourceIds);
+    const invalidCount = Math.max(0, totalFound - validCount);
 
     const fullTextSources = room.sources.filter((s) => s.contentLevel === 'full_text').length;
     const abstractSources = room.sources.filter((s) => s.contentLevel === 'abstract_only').length;
@@ -265,7 +273,7 @@ export function ReportView({
   }, [room, validSourceIds]);
 
   const handleDownloadMd = () => {
-    triggerFileDownload(`${room.id}-report.md`, generateRoomMarkdown(room), 'text/markdown;charset=utf-8');
+    triggerFileDownload(`${room.id}-report.md`, generateRoomMarkdown(room, lang), 'text/markdown;charset=utf-8');
   };
 
   if (!room.report) {
@@ -273,10 +281,10 @@ export function ReportView({
       <div className="flex-1 flex items-center justify-center p-8">
         <div className="max-w-md text-center space-y-4">
           <h2 className="font-display text-2xl font-semibold text-[var(--ink)]">
-            Chưa tạo Báo cáo tổng hợp
+            {t('noReportTitle')}
           </h2>
           <p className="text-sm text-[var(--ink-secondary)] leading-relaxed">
-            Bấm nút bên dưới để Trọng tài tổng hợp toàn bộ lập luận, chấm bảng điểm Rubric theo từng góc nhìn và dựng báo cáo sạch mắt.
+            {t('noReportDesc')}
           </p>
           <button
             type="button"
@@ -285,7 +293,7 @@ export function ReportView({
             className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[var(--accent)] text-[var(--accent-ink)] font-semibold text-sm hover:bg-[var(--accent-hover)] disabled:opacity-50 cursor-pointer"
           >
             <Scale className="w-4 h-4" />
-            {isBusy ? 'Trọng tài đang tổng hợp…' : 'Chạy Trọng tài dựng Báo cáo'}
+            {isBusy ? t('judgeSynthesizing') : t('runJudgeBuildReport')}
           </button>
         </div>
       </div>
@@ -300,13 +308,13 @@ export function ReportView({
         {/* Left TOC & Verifier */}
         <aside className="lg:sticky lg:top-6 space-y-5">
           <div className="space-y-1.5">
-            <div className="text-xs font-semibold text-[var(--ink-muted)] mb-2">Mục lục báo cáo</div>
+            <div className="text-xs font-semibold text-[var(--ink-muted)] mb-2">{t('tocTitle')}</div>
             {[
-              { href: '#sec-summary', label: '1. Tóm tắt kết luận' },
-              { href: '#sec-perspectives', label: '2. Phân tích theo góc nhìn' },
-              { href: '#sec-debates', label: '3. Điểm còn tranh cãi' },
-              { href: '#sec-rubric', label: '4. Bảng điểm Trọng tài' },
-              { href: '#sec-refs', label: '5. Tài liệu tham khảo' },
+              { href: '#sec-summary', label: t('toc1') },
+              { href: '#sec-perspectives', label: t('toc2') },
+              { href: '#sec-debates', label: t('toc3') },
+              { href: '#sec-rubric', label: t('toc4') },
+              { href: '#sec-refs', label: t('toc5') },
             ].map((item) => (
               <a
                 key={item.href}
@@ -321,32 +329,36 @@ export function ReportView({
           <div className="p-3.5 rounded-xl border border-[var(--border)] bg-[var(--surface)] space-y-1.5 text-xs">
             <div className="flex items-center gap-1.5 font-semibold text-[var(--ok)]">
               <CheckCircle2 className="w-4 h-4" />
-              Kiểm chứng Toàn vẹn
+              {t('integrityCheckTitle')}
             </div>
             <div className="font-mono-num text-[var(--ink-secondary)]">
-              • {citationStats.validCount}/{citationStats.totalFound} mã [S#] hợp lệ
+              {t('validCitCheck', { valid: citationStats.validCount, total: citationStats.totalFound })}
             </div>
             {citationStats.inferredCount > 0 && (
               <div className="font-mono-num text-[var(--ink-secondary)]">
-                • {citationStats.inferredCount} trích dẫn suy luận
+                {t('inferredCitCheck', { count: citationStats.inferredCount })}
               </div>
             )}
             <div className="font-mono-num text-[var(--ink-secondary)]">
-              • {citationStats.invalidCount} trích dẫn không khớp
+              {t('unmatchedCitCheck', { count: citationStats.invalidCount })}
             </div>
             {report.verificationSummary && report.verificationSummary.totalNumericChecked > 0 && (
               <div className="font-mono-num text-[var(--ink-secondary)]">
-                • Số liệu khớp: {report.verificationSummary.totalNumericMatched}/
-                {report.verificationSummary.totalNumericChecked}
+                {t('numericMatchCheck', {
+                  matched: report.verificationSummary.totalNumericMatched,
+                  checked: report.verificationSummary.totalNumericChecked,
+                })}
               </div>
             )}
             <div className="font-mono-num text-[var(--ink-muted)]">
-              • Nguồn: {citationStats.fullTextSources} toàn văn · {citationStats.abstractSources}{' '}
-              tóm tắt
+              {t('sourcesBreakdownCheck', {
+                full: citationStats.fullTextSources,
+                abs: citationStats.abstractSources,
+              })}
             </div>
             {citationStats.fallbacks > 0 && (
               <div className="font-mono-num text-[var(--warn)]">
-                • {citationStats.fallbacks} lượt fallback model
+                {t('fallbackTurnsCheck', { count: citationStats.fallbacks })}
               </div>
             )}
           </div>
@@ -356,17 +368,17 @@ export function ReportView({
         <article className="rounded-2xl border border-[var(--border)] bg-[var(--surface)] shadow-[var(--shadow-card)] p-6 sm:p-9 space-y-8">
           <header className="space-y-2 pb-6 border-b border-[var(--border)]">
             <h1 className="font-display text-2xl sm:text-3xl font-semibold text-[var(--ink)] leading-snug [text-wrap:balance]">
-              {report.title}
+              {formatReportTitle(report, lang)}
             </h1>
-            <p className="text-xs text-[var(--ink-muted)] font-mono-num">{report.subtitle}</p>
+            <p className="text-xs text-[var(--ink-muted)] font-mono-num">{formatReportSubtitle(report, lang)}</p>
           </header>
 
           <section id="sec-summary" className="space-y-3">
             <h2 className="font-display text-lg font-semibold text-[var(--ink)]">
-              1. Tóm tắt kết luận
+              {t('sec1Title')}
             </h2>
             <MarkdownText
-              text={report.executiveSummary}
+              text={formatExecutiveSummary(report, lang)}
               onCitationClick={onCitationClick}
               validSourceIds={validSourceIds}
             />
@@ -374,14 +386,21 @@ export function ReportView({
 
           <section id="sec-perspectives" className="space-y-3">
             <h2 className="font-display text-lg font-semibold text-[var(--ink)]">
-              2. Phân tích theo góc nhìn
+              {t('sec2Title')}
             </h2>
             <div className="divide-y divide-[var(--border)]">
               {report.perspectiveBreakdown.map((item) => (
                 <div key={item.handle} className="py-3 space-y-1">
-                  <div className="text-sm font-semibold text-[var(--accent)]">@{item.handle}</div>
+                  <div className="text-sm font-semibold text-[var(--accent)]">
+                    @{localizeHandle(item.handle, lang)}
+                    {localizeHandle(item.handle, lang) !== item.handle && (
+                      <span className="ml-1.5 text-[11px] font-normal text-[var(--ink-muted)] font-mono-num">
+                        (@{item.handle})
+                      </span>
+                    )}
+                  </div>
                   <p className="text-[14.5px] text-[var(--ink-secondary)] leading-relaxed">
-                    {item.summary}{' '}
+                    {formatBreakdownSummary(item, lang)}{' '}
                     {item.citations.map((c) => (
                       <button
                         key={c}
@@ -401,7 +420,7 @@ export function ReportView({
           {report.openDebates.length > 0 && (
             <section id="sec-debates" className="space-y-2.5">
               <h2 className="font-display text-lg font-semibold text-[var(--ink)]">
-                3. Điểm còn tranh cãi
+                {t('sec3Title')}
               </h2>
               <ul className="list-disc pl-5 space-y-1.5 text-[15px] text-[var(--ink-secondary)]">
                 {report.openDebates.map((d, i) => (
@@ -414,15 +433,19 @@ export function ReportView({
           {report.rubric.length > 0 && (
             <section id="sec-rubric" className="space-y-3">
               <h2 className="font-display text-lg font-semibold text-[var(--ink)]">
-                4. Bảng điểm Trọng tài (tự co giãn theo {report.rubric.length} góc nhìn)
+                {t('sec4Title', { count: report.rubric.length })}
               </h2>
-              {report.evaluationWarnings && report.evaluationWarnings.length > 0 && (
+              {((report.evaluationWarningItems && report.evaluationWarningItems.length > 0) ||
+                (report.evaluationWarnings && report.evaluationWarnings.length > 0)) && (
                 <div className="p-3.5 rounded-xl border border-[var(--warn)]/60 bg-[var(--warn-soft)] space-y-1 text-xs text-[var(--ink)]">
                   <div className="flex items-center gap-1.5 font-semibold text-[var(--warn)]">
                     <AlertTriangle className="w-4 h-4 shrink-0" />
-                    Lưu ý trích xuất điểm Trọng tài
+                    {t('judgeExtractWarnings')}
                   </div>
-                  {report.evaluationWarnings.map((w, idx) => (
+                  {(report.evaluationWarningItems && report.evaluationWarningItems.length > 0
+                    ? report.evaluationWarningItems.map((w) => formatStructuredWarning(w, lang))
+                    : (report.evaluationWarnings ?? [])
+                  ).map((w, idx) => (
                     <div key={idx}>• {w}</div>
                   ))}
                 </div>
@@ -431,11 +454,17 @@ export function ReportView({
                 <table className="w-full text-left text-sm">
                   <thead className="bg-[var(--bg-subtle)] text-xs text-[var(--ink-secondary)]">
                     <tr>
-                      <th className="py-2.5 px-4 font-semibold">Góc nhìn</th>
-                      <th className="py-2.5 px-4 font-semibold text-right">Bằng chứng</th>
-                      <th className="py-2.5 px-4 font-semibold text-right">Logic</th>
-                      <th className="py-2.5 px-4 font-semibold text-right">Phản biện</th>
-                      <th className="py-2.5 px-4 font-semibold text-right">Tổng</th>
+                      <th className="py-2.5 px-4 font-semibold">{t('colPerspective')}</th>
+                      <th className="py-2.5 px-4 font-semibold text-right">{t('colEvidence')}</th>
+                      <th className="py-2.5 px-4 font-semibold text-right">{t('colLogic')}</th>
+                      <th className="py-2.5 px-4 font-semibold text-right">{t('colRebuttal')}</th>
+                      <th className="py-2.5 px-4 font-semibold text-right">{t('colTotal')}</th>
+                      <th
+                        className="py-2.5 px-4 font-semibold text-right"
+                        title={t('colSpreadTitle')}
+                      >
+                        {t('colSpread')}
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[var(--border)] font-mono-num">
@@ -445,13 +474,18 @@ export function ReportView({
                           className="py-2.5 px-4 font-sans font-semibold"
                           style={{ color: getPerspectiveColorVar(row.colorIndex) }}
                         >
-                          <span>@{row.handle}</span>
+                          <span>@{localizeHandle(row.handle, lang)}</span>
+                          {localizeHandle(row.handle, lang) !== row.handle && (
+                            <span className="ml-1 text-[10px] font-normal text-[var(--ink-muted)] font-mono-num">
+                              (@{row.handle})
+                            </span>
+                          )}
                           {row.fallbackScored && (
                             <span
-                              title="Trọng tài không trả về đủ điểm JSON; hiển thị điểm cơ sở 5.0"
+                              title={t('fallbackTitle')}
                               className="ml-2 inline-block px-1.5 py-0.5 rounded bg-[var(--warn-soft)] text-[var(--warn)] text-[10px] font-medium align-middle"
                             >
-                              Dự phòng
+                              {t('fallbackBadge')}
                             </span>
                           )}
                         </td>
@@ -467,17 +501,104 @@ export function ReportView({
                         <td className="py-2.5 px-4 text-right font-semibold text-[var(--accent)]">
                           {row.total.toFixed(1)}
                         </td>
+                        <td
+                          className={`py-2.5 px-4 text-right ${
+                            (row.totalSpread ?? 0) >= 1.5 ? 'text-[var(--warn)] font-semibold' : 'text-[var(--ink-secondary)]'
+                          }`}
+                          title={
+                            row.totalsByRun && row.totalsByRun.length > 1
+                              ? t('spreadTitleMulti', {
+                                  scores: row.totalsByRun.map((x) => (x === null ? '—' : x.toFixed(1))).join(' · '),
+                                })
+                              : t('spreadTitleSingle')
+                          }
+                        >
+                          {row.runsTotal && row.runsTotal > 1
+                            ? `±${(row.totalSpread ?? 0).toFixed(1)} (${row.runsScored ?? 0}/${row.runsTotal})`
+                            : '—'}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
+              {report.judgeReliability && (
+                <div className="p-3.5 rounded-xl border border-[var(--border)] bg-[var(--bg-subtle)] space-y-1 text-xs text-[var(--ink-secondary)]">
+                  <div className="font-semibold text-[var(--ink)]">{t('judgeReliabilityTitle')}</div>
+                  <div>
+                    {t('judgeRunsValid', {
+                      parsed: report.judgeReliability.runsParsed,
+                      requested: report.judgeReliability.runsRequested,
+                      seed: report.judgeReliability.seed,
+                    })}
+                  </div>
+                  <div>
+                    {t('judgeOrderLine', {
+                      status:
+                        report.judgeReliability.rankingStable === null
+                          ? t('rankingInsufficient')
+                          : report.judgeReliability.rankingStable
+                          ? t('rankingStable')
+                          : t('rankingChanged'),
+                    })}
+                  </div>
+                  <div>
+                    • {t('judgeFamilyLabel')} <b>{report.judgeReliability.judgeFamily}</b>
+                    {t('debaterFamiliesLabel')} {report.judgeReliability.debaterFamilies.join(', ') || '—'}
+                    {report.judgeReliability.sameFamilyAsDebaters && (
+                      <span className="text-[var(--warn)] font-semibold">{t('sameFamilyWarn')}</span>
+                    )}
+                  </div>
+                </div>
+              )}
+              {report.verificationSummary?.claimSupport && (
+                <details className="p-3.5 rounded-xl border border-[var(--border)] text-xs text-[var(--ink-secondary)]">
+                  <summary className="cursor-pointer font-semibold text-[var(--ink)]">
+                    {t('claimSupportSummaryHeading', {
+                      summary: formatClaimCounts(report.verificationSummary.claimSupport.totals, lang),
+                    })}
+                  </summary>
+                  <div className="mt-2 space-y-1">
+                    {Object.entries(report.verificationSummary.claimSupport.byHandle).map(([h, c]) => (
+                      <div key={h}>
+                        • @{localizeHandle(h, lang)}: {formatClaimCounts(c, lang)}
+                      </div>
+                    ))}
+                    <ul className="mt-2 space-y-1.5">
+                      {report.verificationSummary.claimSupport.claims.map((c) => (
+                        <li key={c.id} className="leading-relaxed">
+                          <span
+                            className={`font-mono-num font-semibold mr-1 ${
+                              c.label === 'supported'
+                                ? 'text-[var(--accent)]'
+                                : c.label === 'unsupported'
+                                ? 'text-[var(--warn)]'
+                                : 'text-[var(--ink-secondary)]'
+                            }`}
+                          >
+                            [{c.label}]
+                          </span>
+                          @{localizeHandle(c.handle, lang)}: {c.sentence}
+                          {c.evidence && (
+                            <span className="italic">
+                              {t('sourceQuotePrefix')}“{c.evidence}”
+                            </span>
+                          )}
+                          {c.downgradedNoQuote && (
+                            <span className="text-[var(--warn)]">{t('downgradedNoQuoteNote')}</span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </details>
+              )}
             </section>
           )}
 
           <section id="sec-refs" className="space-y-2.5">
             <h2 className="font-display text-lg font-semibold text-[var(--ink)]">
-              5. Tài liệu tham khảo ({room.sources.length})
+              {t('sec5Title', { count: room.sources.length })}
             </h2>
             <div className="space-y-2">
               {room.sources.map((s) => (
@@ -490,14 +611,25 @@ export function ReportView({
                     [{s.id}]
                   </button>
                   <span className="font-medium text-[var(--ink)]">{s.title}</span>
-                  <span> ({s.origin}) — </span>
+                  <span> ({s.origin}) </span>
+                  <span
+                    className={`inline-block px-1.5 py-0.5 rounded text-[10.5px] font-medium align-middle ${
+                      isWeakEvidenceSource(s.sourceType)
+                        ? 'bg-[var(--warn-soft)] text-[var(--warn)]'
+                        : 'bg-[var(--bg-subtle)] text-[var(--ink-secondary)]'
+                    }`}
+                    title={describeRetrieval(s, lang) || t('noRetrievalInfo')}
+                  >
+                    {sourceTypeLabel(s, lang)}
+                  </span>
+                  <span> — </span>
                   <a
                     href={s.url}
                     target="_blank"
                     rel="noreferrer"
                     className="text-[var(--accent)] hover:underline"
                   >
-                    Mở nguồn
+                    {t('openSourceLink')}
                   </a>
                 </div>
               ))}
@@ -512,7 +644,7 @@ export function ReportView({
                 className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[var(--accent)] text-[var(--accent-ink)] text-xs font-semibold hover:bg-[var(--accent-hover)] cursor-pointer"
               >
                 <Download className="w-3.5 h-3.5" />
-                Tải Báo cáo (.md)
+                {t('downloadReportMd')}
               </button>
               <button
                 type="button"
@@ -521,7 +653,7 @@ export function ReportView({
                 className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-xs font-medium text-[var(--ink)] hover:border-[var(--accent)] cursor-pointer"
               >
                 <Scale className="w-3.5 h-3.5" />
-                Cập nhật tổng hợp
+                {t('updateSynthesis')}
               </button>
             </div>
 
@@ -531,7 +663,7 @@ export function ReportView({
               className="inline-flex items-center gap-1.5 text-xs font-medium text-[var(--ink-secondary)] hover:text-[var(--ink)] cursor-pointer"
             >
               <ArrowLeft className="w-3.5 h-3.5" />
-              Quay lại phòng hỏi tiếp
+              {t('backToChat')}
             </button>
           </footer>
         </article>
@@ -549,6 +681,7 @@ interface AuditViewProps {
 }
 
 export function AuditView({ room }: AuditViewProps) {
+  const { lang, t } = useI18n();
   const [expandedPromptId, setExpandedPromptId] = useState<string | null>(
     room.audit[0]?.id ?? null
   );
@@ -568,10 +701,10 @@ export function AuditView({ room }: AuditViewProps) {
         <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-[var(--border)]">
           <div>
             <h1 className="font-display text-2xl font-semibold text-[var(--ink)]">
-              Nhật ký Kiểm chứng (Audit Trail)
+              {t('auditTitle')}
             </h1>
             <p className="text-xs text-[var(--ink-muted)] mt-1">
-              Kiểm tra chính xác ngữ cảnh, nguồn [S#] và prompt thô từng góc nhìn đã nhận · Lưu bền vững tại events.jsonl.
+              {t('auditSubtitle')}
             </p>
           </div>
           <button
@@ -580,20 +713,20 @@ export function AuditView({ room }: AuditViewProps) {
             className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] hover:border-[var(--accent)] text-xs font-medium text-[var(--ink)] cursor-pointer"
           >
             <FileJson className="w-3.5 h-3.5 text-[var(--accent)]" />
-            Tải events.jsonl gốc
+            {t('downloadJsonl')}
           </button>
         </div>
 
         {/* Summary parameters */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
           {[
-            { k: 'Chế độ gọi', v: 'Stateless · stream=false' },
-            { k: 'Số lượt đã ghi', v: `${room.audit.length} lượt` },
+            { k: t('auditCallMode'), v: 'Stateless · stream=false' },
+            { k: t('auditLoggedTurns'), v: t('auditTurnsUnit', { count: room.audit.length }) },
             {
-              k: 'Cảnh báo Fallback',
-              v: `${room.audit.filter((a) => a.fallbackWarning).length} lượt`,
+              k: t('auditFallbackWarns'),
+              v: t('auditTurnsUnit', { count: room.audit.filter((a) => a.fallbackWarning).length }),
             },
-            { k: 'Nguồn xác minh', v: `${room.sources.length} nguồn` },
+            { k: t('auditVerifiedSources'), v: t('auditSourcesUnit', { count: room.sources.length }) },
           ].map((item) => (
             <div
               key={item.k}
@@ -610,13 +743,13 @@ export function AuditView({ room }: AuditViewProps) {
           <div className="p-4 rounded-xl border border-[var(--warn)] bg-[var(--warn-soft)] space-y-1.5">
             <div className="flex items-center gap-2 text-xs font-semibold text-[var(--warn)]">
               <AlertTriangle className="w-4 h-4" />
-              Cảnh báo đổi mô hình dự phòng (Fallback)
+              {t('auditFallbackBanner')}
             </div>
             {room.audit
               .filter((a) => a.fallbackWarning)
               .map((a) => (
                 <p key={a.id} className="text-xs text-[var(--ink)]">
-                  • Vòng {a.round}: {a.fallbackWarning}
+                  • {t('roundN', { round: a.round })}: {a.fallbackWarning}
                 </p>
               ))}
           </div>
@@ -626,7 +759,7 @@ export function AuditView({ room }: AuditViewProps) {
         <div className="space-y-3">
           {room.audit.length === 0 ? (
             <div className="p-8 rounded-xl border border-dashed border-[var(--border-strong)] text-center text-sm text-[var(--ink-muted)]">
-              Chưa có bản ghi kiểm chứng nào. Hãy gửi 1 câu hỏi ở Phòng chat để hệ thống ghi lại prompt thô.
+              {t('auditEmpty')}
             </div>
           ) : (
             room.audit.map((entry) => {
@@ -642,10 +775,12 @@ export function AuditView({ room }: AuditViewProps) {
                     className="w-full text-left px-4 py-3 flex flex-wrap items-center justify-between gap-2 hover:bg-[var(--surface-hover)] cursor-pointer"
                   >
                     <div className="flex flex-wrap items-center gap-2 text-xs">
-                      <span className="font-semibold text-[var(--ink)]">@{entry.handle}</span>
+                      <span className="font-semibold text-[var(--ink)]">
+                        @{localizeHandle(entry.handle, lang)}
+                      </span>
                       <span className="text-[var(--ink-muted)]">·</span>
                       <span className="font-mono-num text-[var(--ink-secondary)]">
-                        Vòng {entry.round}
+                        {t('roundN', { round: entry.round })}
                       </span>
                       <span className="text-[var(--ink-muted)]">·</span>
                       <span className="font-mono-num text-[var(--ink-muted)]">
@@ -655,13 +790,13 @@ export function AuditView({ room }: AuditViewProps) {
                         <>
                           <span className="text-[var(--ink-muted)]">·</span>
                           <span className="font-mono-num text-[var(--accent)]">
-                            Nguồn: {entry.sourceIdsSeen.map((s) => `[${s}]`).join(' ')}
+                            {t('auditSourcesPrefix')}{entry.sourceIdsSeen.map((s) => `[${s}]`).join(' ')}
                           </span>
                         </>
                       )}
                     </div>
                     <span className="text-xs font-medium text-[var(--accent)]">
-                      {isOpen ? 'Ẩn prompt thô' : 'Xem prompt thô'}
+                      {isOpen ? t('hideRawPrompt') : t('viewRawPrompt')}
                     </span>
                   </button>
                   {isOpen && (

@@ -9,13 +9,17 @@ import type {
   ReportData,
   Room,
   SourceItem,
+  TurnProvenance,
   TurnVerification,
 } from '../types.ts';
+import { getStoredUiLanguage, translate } from './i18n.tsx';
 
 async function parseJson<T>(res: Response): Promise<T> {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const errMsg = (data as { error?: string }).error || `Lỗi máy chủ (HTTP ${res.status})`;
+    const errMsg =
+      (data as { error?: string }).error ||
+      translate(getStoredUiLanguage(), 'httpServerError', { status: res.status });
     throw new Error(errMsg);
   }
   return data as T;
@@ -250,6 +254,7 @@ export async function runPerspectiveApi(
   fallbackFrom?: string;
   laneId: string;
   rawPrompt: string;
+  provenance?: TurnProvenance;
 }> {
   const res = await fetch('/api/ai/perspective', {
     method: 'POST',
@@ -268,6 +273,7 @@ export async function runSynthesizeApi(
       handle?: string;
       perspectiveId?: string;
       laneId?: string;
+      modelLabel?: string;
       content: string;
       round: number;
     }>;
@@ -277,6 +283,8 @@ export async function runSynthesizeApi(
     judgeModel?: string;
     judgeProviderId?: string;
     judgeLaneId?: string;
+    judgeRuns?: number;
+    claimCheck?: boolean;
   },
   signal?: AbortSignal
 ): Promise<{
@@ -287,6 +295,7 @@ export async function runSynthesizeApi(
   anonymizeUsed: boolean;
   laneId?: string;
   modelUsed?: string;
+  provenance?: TurnProvenance;
 }> {
   const res = await fetch('/api/ai/synthesize', {
     method: 'POST',

@@ -231,6 +231,10 @@ async def _search_arxiv(client: httpx.AsyncClient, query: str) -> list[dict[str,
                     "title": clean_text(title_el.text or "", 180),
                     "excerpt": excerpt,
                     "url": entry_url,
+                    "sourceType": "preprint",
+                    "venue": "arXiv",
+                    "publishedYear": year if year and year.isdigit() else None,
+                    "_provider": "arxiv",
                     "contentLevel": "abstract_only",
                     "charCount": len(excerpt),
                     "verified": True,
@@ -241,6 +245,43 @@ async def _search_arxiv(client: httpx.AsyncClient, query: str) -> list[dict[str,
         return out
     except Exception:
         return []
+
+
+SOURCE_TYPE_LABELS = {
+    "preprint": "PREPRINT (chưa bình duyệt)",
+    "published_venue": "ĐÃ XUẤT BẢN tại tạp chí/hội nghị",
+    "other_scholarly": "TÀI LIỆU HỌC THUẬT KHÁC",
+    "encyclopedia": "BÁCH KHOA (Wikipedia)",
+    "web": "TRANG WEB",
+    "web_pdf": "PDF TỪ WEB",
+    "user_upload": "PDF NGƯỜI DÙNG TẢI LÊN",
+    "user_excerpt": "TRÍCH ĐOẠN NGƯỜI DÙNG DÁN",
+}
+
+RETRIEVAL_PARAMS = {
+    "perProviderLimit": 3,
+    "wikipediaPerLanguage": 2,
+    "maxSources": 6,
+    "ranking": "keyword_overlap_v1",
+    "fulltextUpgradeMaxItems": 3,
+    "fulltextMaxPages": 20,
+    "fulltextCharCap": MAX_FULLTEXT_EXCERPT_LEN,
+    "abstractCharCap": MAX_SOURCE_EXCERPT_LEN,
+}
+
+
+def classify_openalex_work(item: dict[str, Any]) -> str:
+    """Phân loại bản ghi OpenAlex. Lưu ý: OpenAlex KHÔNG xác nhận bình duyệt; 'published_venue' chỉ nghĩa là
+    bản ghi gắn với tạp chí/hội nghị, còn repository/submittedVersion được coi là preprint."""
+    work_type = str(item.get("type") or "").strip().lower()
+    primary = item.get("primary_location") or {}
+    src_type = str((primary.get("source") or {}).get("type") or "").strip().lower()
+    version = str(primary.get("version") or "").strip().lower()
+    if work_type == "preprint" or src_type == "repository" or version == "submittedversion":
+        return "preprint"
+    if src_type in ("journal", "conference"):
+        return "published_venue"
+    return "other_scholarly"
 
 
 async def _search_openalex(client: httpx.AsyncClient, query: str) -> list[dict[str, Any]]:
@@ -276,12 +317,20 @@ async def _search_openalex(client: httpx.AsyncClient, query: str) -> list[dict[s
                 candidate_oa = str(oa_info.get("oa_url") or "").strip()
                 if candidate_oa.lower().endswith(".pdf") or "/pdf" in candidate_oa.lower():
                     pdf_url = candidate_oa
+            primary = item.get("primary_location") or {}
+            venue_src = primary.get("source") or {}
             out.append(
                 {
                     "origin": f"OpenAlex · {item.get('publication_year') or 'Recent'}",
                     "title": clean_text(title, 180),
                     "excerpt": excerpt,
                     "url": item.get("doi") or item.get("id") or "https://openalex.org",
+                    "sourceType": classify_openalex_work(item),
+                    "venue": str(venue_src.get("display_name") or "").strip() or None,
+                    "citedByCount": item.get("cited_by_count") if isinstance(item.get("cited_by_count"), int) else None,
+                    "publishedYear": str(item.get("publication_year") or "") or None,
+                    "doi": item.get("doi") or None,
+                    "_provider": "openalex",
                     "contentLevel": "abstract_only",
                     "charCount": len(excerpt),
                     "verified": True,
@@ -323,6 +372,9 @@ async def _search_wikipedia_lang(client: httpx.AsyncClient, query: str, lang: st
                         "title": clean_text(title, 160),
                         "excerpt": cleaned_excerpt,
                         "url": fullurl,
+                        "sourceType": "encyclopedia",
+                        "venue": f"Wikipedia ({lang})",
+                        "_provider": f"wikipedia_{lang}",
                         "contentLevel": "excerpt",
                         "charCount": len(cleaned_excerpt),
                         "verified": True,
@@ -343,6 +395,9 @@ async def _search_wikipedia_lang(client: httpx.AsyncClient, query: str, lang: st
                     "title": clean_text(item.get("title", ""), 160),
                     "excerpt": cleaned_excerpt,
                     "url": f"https://{lang}.wikipedia.org/?curid={item.get('pageid')}",
+                    "sourceType": "encyclopedia",
+                    "venue": f"Wikipedia ({lang})",
+                    "_provider": f"wikipedia_{lang}",
                     "contentLevel": "excerpt",
                     "charCount": len(cleaned_excerpt),
                     "verified": True,
@@ -460,8 +515,19 @@ async def search_open_academic_sources(
                     )
                 )
 
-    for item in deduped:
+    retrieved_at = utc_now_iso()
+    normalized = normalize_academic_query(query)
+    for rank, item in enumerate(deduped, start=1):
         item.pop("_pdf_url", None)
+        item["retrieval"] = {
+            "provider": item.pop("_provider", None) or "unknown",
+            "query": query,
+            "normalizedQuery": normalized,
+            "retrievedAt": retrieved_at,
+            "rank": rank,
+            "fulltextUpgraded": item.get("contentLevel") == "full_text",
+            "params": {**RETRIEVAL_PARAMS, "fulltextUpgrade": bool(upgrade_fulltext)},
+        }
     return deduped
 
 
@@ -489,6 +555,14 @@ def extract_uploaded_pdf_source(raw_bytes: bytes, filename: str = "tai-lieu.pdf"
         "title": clean_text(safe_name, 160),
         "excerpt": excerpt,
         "url": f"#local-pdf:{quote(safe_name)}",
+        "sourceType": "user_upload",
+        "retrieval": {
+            "provider": "upload",
+            "filename": safe_name,
+            "retrievedAt": utc_now_iso(),
+            "pagesTotal": page_count,
+            "params": {"maxPages": 25, "charCap": MAX_FULLTEXT_EXCERPT_LEN},
+        },
         "contentLevel": "full_text",
         "charCount": len(excerpt),
         "verified": True,
@@ -519,6 +593,15 @@ async def fetch_url_as_source(
     ctype = (resp.headers.get("content-type") or "").lower()
     parsed = urlparse(final_url)
     hostname = (parsed.hostname or "").removeprefix("www.")
+    retrieval = {
+        "provider": "url",
+        "requestedUrl": raw_url,
+        "finalUrl": final_url,
+        "httpStatus": resp.status_code,
+        "contentType": ctype or None,
+        "retrievedAt": utc_now_iso(),
+        "params": {"maxBytes": _MAX_FETCH_BYTES, "charCap": MAX_FETCH_SOURCE_EXCERPT_LEN, "maxRedirectHops": _MAX_REDIRECT_HOPS},
+    }
 
     if "application/pdf" in ctype or parsed.path.lower().endswith(".pdf") or (b"%PDF-" in raw_bytes[:1024]):
         pdf_text, page_count = _extract_pdf_text(raw_bytes, max_pages=20)
@@ -531,6 +614,9 @@ async def fetch_url_as_source(
             "title": clean_text(title, 160),
             "excerpt": excerpt,
             "url": final_url,
+            "sourceType": "web_pdf",
+            "venue": hostname or None,
+            "retrieval": retrieval,
             "contentLevel": content_level,
             "charCount": len(excerpt),
             "verified": True,
@@ -546,6 +632,9 @@ async def fetch_url_as_source(
         "title": clean_text(title_match.group(1) if title_match else final_url, 160),
         "excerpt": excerpt,
         "url": final_url,
+        "sourceType": "web",
+        "venue": hostname or None,
+        "retrieval": retrieval,
         "contentLevel": "full_text" if len(excerpt) >= 2500 else "excerpt",
         "charCount": len(excerpt),
         "verified": True,

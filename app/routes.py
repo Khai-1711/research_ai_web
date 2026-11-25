@@ -426,8 +426,19 @@ def build_api_router(
             "elapsedSec": elapsed_sec,
             "modelUsed": result.model_used,
             "fallbackFrom": result.fallback_from,
-            "laneId": result.lane_id if result.lane_id != "bridge" else (requested_lane or "bridge"),
+            # KHÔNG thay bằng laneId frontend tự đoán (round-robin): nếu Bridge không báo lane thực tế
+            # thì ghi trung thực "bridge" + laneSource="unreported" trong provenance.
+            "laneId": result.lane_id,
             "rawPrompt": result.raw_prompt,
+            "provenance": {
+                **result.provenance(),
+                "laneRequestedByClient": requested_lane or None,
+                "perspectiveId": str(perspective.get("id") or ""),
+                "detailMode": detail_mode or None,
+                "round": round_num,
+                "completedAt": utc_now_iso(),
+                "elapsedSec": elapsed_sec,
+            },
         }
 
     # 6. Judge & Synthesizer (Report + Dynamic Rubric + Living Outline + Cross-Account Exclusion)
