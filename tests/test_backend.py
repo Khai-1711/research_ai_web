@@ -1418,17 +1418,38 @@ def test_remote_share_security_middleware_blocks_unauthed_and_host_admin_routes(
         return httpx.Response(200, json={"lanes": []})
 
     bridge = BridgeClient("http://bridge.test", transport=httpx.MockTransport(handler))
+    remote_headers = {
+        "Origin": "https://khai-1711.github.io",
+        "Cf-Connecting-Ip": "203.0.113.9",
+    }
+
+    # A. Default open-tunnel mode (share_token=""): remote friends enter without passcode, host admin still 403
+    open_cfg = Settings(
+        data_dir=tmp_path / "rooms_open",
+        dist_dir=tmp_path / "dist_open",
+        share_token="",
+    )
+    open_client = TestClient(create_app(open_cfg, bridge_client=bridge))
+
+    r_open_rooms = open_client.get("/api/rooms", headers=remote_headers)
+    assert r_open_rooms.status_code == 200
+    assert r_open_rooms.headers.get("access-control-allow-origin") in ("*", "https://khai-1711.github.io")
+
+    r_open_health = open_client.get("/api/health", headers=remote_headers)
+    assert r_open_health.status_code == 200
+    assert r_open_health.json()["isLocalOwner"] is False
+    assert r_open_health.json()["shareProtected"] is False
+
+    assert open_client.post("/api/lanes/acc1/login", headers=remote_headers).status_code == 403
+    assert open_client.get("/api/share-info", headers=remote_headers).status_code == 403
+
+    # B. Optional WEBCHAT_SHARE_TOKEN mode: enforces token on remote calls while keeping host admin 403
     cfg = Settings(
         data_dir=tmp_path / "rooms",
         dist_dir=tmp_path / "dist",
         share_token="secret-pass-42",
     )
     client = TestClient(create_app(cfg, bridge_client=bridge))
-
-    remote_headers = {
-        "Origin": "https://khai-1711.github.io",
-        "Cf-Connecting-Ip": "203.0.113.9",
-    }
 
     # 1. Missing token via tunnel -> 401 with CORS header exposed
     r_unauth = client.get("/api/rooms", headers=remote_headers)

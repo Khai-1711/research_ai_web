@@ -25,7 +25,7 @@
   - 백엔드 검증기가 매 AI 응답마다 조작된 `[S#]`, 초록 전용 출처 인용, 수치 주장(`%`, 소수점, 표본 크기 `n=...`)을 원문과 결정론적으로 대조해 카드 하단 **Kiểm chứng tự động** 및 심판 감사 보고서에 제공합니다.
 - **풍부한 학술 Markdown & 블라인드 심판:** GFM 표·제목·인용문·코드 블록 및 클릭 가능한 인용 배지를 렌더링하며, 양방향 익명화(`Ứng viên A/B/C…`), 3축 루브릭(`Evidence` / `Logic` / `Rebuttal`), **라이빙 아웃라인**, 5개 섹션 `.md` 보고서 내보내기를 제공합니다.
 - **생존성 우선 심층 연구 스트리밍 (`X-DSH-Research-Mode: 1` + SSE Heartbeat):** 연구 턴에서는 180초 고정 시간 제한과 50초 스마트 모델 자동 하향(`gemini-carbon`/`gemini-neon` → `gemini-4-hydrogen`)을 제거해 선택한 모델을 유지하며, 진행 단계(`queued_lock` → `waiting_gemini` → `thinking` → `generating`)와 하트비트를 실시간 전송합니다.
-- **GitHub Pages 정적 웹 + 로컬 백엔드 안전 공유 (`share-pages`):** 정적 UI는 GitHub Pages에서 서빙하고, 신뢰할 수 있는 1–2명의 지인에게 패스코드가 적용된 HTTPS 터널(`python start.py share`)로 내 로컬 백엔드를 안전하게 공유할 수 있습니다.
+- **GitHub Pages 정적 웹 + 로컬 백엔드 공유 (`share-pages`):** 정적 UI는 GitHub Pages에서 서빙하고, 신뢰할 수 있는 1–2명의 지인이 로그인 절차 없이 HTTPS 터널(`python start.py share`)로 내 로컬 백엔드에 바로 연결해 사용할 수 있습니다(필요 시 `.env`의 `WEBCHAT_SHARE_TOKEN`으로 선택 잠금 가능, 호스트 관리 기능은 원격 잠금).
 
 ### 2. 독립형 비주얼 AI 플로우 맵 (`/flow`)
 - **제로 커플링(Zero-Coupling) 실시간 시각화:** 채팅 화면과 DOM·상태를 공유하지 않고 백엔드의 append-only `events.jsonl` 및 SSE(`/api/rooms/{id}/events`)만 구독합니다.
@@ -146,21 +146,21 @@ pytest -v
 npx tsc --noEmit
 ```
 
-### 4. GitHub Pages로 지인에게 안전하게 공유하기 (`share-pages` 브랜치)
+### 4. GitHub Pages로 지인에게 공유하기 (`share-pages` 브랜치)
 1. `share-pages` 브랜치를 GitHub에 푸시하면 [deploy-pages.yml](.github/workflows/deploy-pages.yml)이 상대 경로(`base: './'`)로 `dist/`를 빌드해 `https://khai-1711.github.io/research_ai_web/`에 배포합니다.
-2. 워크스페이스 루트에서 로컬 백엔드(`python start.py`)를 켠 뒤 새 터미널에서 아래 명령으로 HTTPS 터널과 패스코드를 시작합니다:
+2. 워크스페이스 루트에서 아래 명령 하나만 실행하면 Bridge·WebChat(`:3000`)·HTTPS 터널이 함께 시작됩니다:
    ```bash
    python start.py share
    ```
-   *(`cloudflared` 필요; `.share_token`을 자동 생성해 `:3000` 인증을 활성화하고 원클릭 초대 링크 `?api=<tunnel-url>#token=<passcode>`를 출력하며, 웹의 **설정** 서랍에서도 링크 생성·복사가 가능합니다.)*
-3. 초대받은 지인은 Python/Node 설치 없이 링크만 열면 바로 사용할 수 있으며, `#token` 프래그먼트는 `localStorage` 저장 후 주소창에서 자동 제거됩니다.
+   *(`cloudflared` 필요; 별도 로그인 없이 바로 열리는 링크 `https://khai-1711.github.io/research_ai_web/?api=<tunnel-url>`을 출력합니다. 선택적으로 토큰 잠금이 필요하면 `webchat/.env`에 `WEBCHAT_SHARE_TOKEN=...`을 추가하세요.)*
+3. 사용이 끝나면 창을 닫거나 `Ctrl+C`로 터널을 즉시 종료합니다.
 
 ---
 
 ## 보안 및 개인정보 보호
 
 - **로컬 비밀 정보 격리:** 채팅 방 기록(`data/rooms/`), API 키(`data/providers.json`), 계정 별칭(`data/lane_names.json`), `.share_token`, `.env` 파일은 `.gitignore`로 Git 추적이 차단되며 API 키는 항상 마스킹(`AIza...9x2Q`)됩니다.
-- **터널 인증 및 호스트 관리 잠금 (`app/main.py`):** 로컬 직접 요청과 프록시·터널 요청(`Cf-Connecting-Ip`, `X-Forwarded-For`, 외부 `Origin`)을 구분해 미인증 원격 요청은 `401`로 차단하고, 쿠키 브라우저 로그인·계정 생성·API 키 추가/삭제·`.share_token` 조회 등 호스트 전용 관리 엔드포인트는 원격에서 `403`으로 잠급니다.
+- **호스트 관리 원격 잠금 (`app/main.py`):** 로컬 직접 요청과 프록시·터널 요청(`Cf-Connecting-Ip`, `X-Forwarded-For`, 외부 `Origin`)을 구분해 쿠키 브라우저 로그인·계정 생성·API 키 추가/삭제·`/api/share-info` 조회 등 호스트 전용 관리 엔드포인트는 원격에서 항상 `403`으로 차단합니다(`.env`에 `WEBCHAT_SHARE_TOKEN`을 설정한 경우에만 미인증 원격 요청을 `401`로 차단).
 - **무상태 Bridge 격리 (`X-DSH-Ephemeral: 1`):** 연구 요청은 Bridge 워커의 기존 채팅 세션·모델 기본값·핸드오프 원장을 읽거나 수정하지 않습니다.
 - **다단계 SSRF 방어 (`app/research.py`):** 비-HTTP(S) 스킴, 루프백·사설·링크로컬 IP 및 `.local`/`.internal` 호스트를 DNS 해석 전후와 최대 5단계 HTTP `Location` 리다이렉트마다 재검증합니다.
 - **안전한 로컬 PDF 업로드:** `/api/research/upload-pdf`는 **15MB** 상한과 `%PDF-` 서명을 검증하며, 텍스트 레이어가 없는 이미지 스캔 PDF는 명확한 오류로 거부합니다.

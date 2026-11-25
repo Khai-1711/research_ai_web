@@ -110,23 +110,16 @@ def create_app(
                 active_token = resolve_active_share_token(
                     cfg, getattr(app.state, "runtime_share_token", "")
                 )
-                if not active_token:
-                    return JSONResponse(
-                        status_code=401,
-                        content={
-                            "error": "Chế độ chia sẻ từ xa chưa được bật (thiếu WEBCHAT_SHARE_TOKEN).",
-                            "code": "share_disabled",
-                        },
-                    )
-                provided = _extract_request_share_token(request)
-                if not provided or not hmac.compare_digest(provided, active_token):
-                    return JSONResponse(
-                        status_code=401,
-                        content={
-                            "error": "Passcode truy cập từ xa không đúng hoặc còn thiếu.",
-                            "code": "invalid_share_token",
-                        },
-                    )
+                if active_token:
+                    provided = _extract_request_share_token(request)
+                    if not provided or not hmac.compare_digest(provided, active_token):
+                        return JSONResponse(
+                            status_code=401,
+                            content={
+                                "error": "Passcode truy cập từ xa không đúng hoặc còn thiếu.",
+                                "code": "invalid_share_token",
+                            },
+                        )
         return await call_next(request)
 
     # CORSMiddleware đăng ký sau @app.middleware để bọc ngoài cùng (kể cả phản hồi 401/403)

@@ -8,7 +8,6 @@ import {
   Edit3,
   Globe,
   KeyRound,
-  Link2,
   LogIn,
   Plus,
   RefreshCw,
@@ -33,7 +32,6 @@ import {
   createLaneApi,
   createProviderApi,
   deleteProviderApi,
-  enableShareTokenApi,
   finishLoginLaneApi,
   fetchShareInfoApi,
   getRemoteConfig,
@@ -145,13 +143,10 @@ export function SettingsDrawer({
     token: string;
     defaultPagesUrl: string;
   } | null>(null);
-  const [shareBusy, setShareBusy] = useState(false);
   const [shareTunnelUrl, setShareTunnelUrl] = useState(() => getRemoteConfig().apiBase);
   const [sharePagesUrl, setSharePagesUrl] = useState(
     'https://khai-1711.github.io/research_ai_web/'
   );
-  const [remoteTokenDraft, setRemoteTokenDraft] = useState(() => getRemoteConfig().shareToken);
-  const [shareMsg, setShareMsg] = useState<string | null>(null);
   const [copiedInvite, setCopiedInvite] = useState(false);
 
   const rawLaneDetails: LaneInfo[] = health?.laneDetails?.length
@@ -187,7 +182,7 @@ export function SettingsDrawer({
         if (info.defaultPagesUrl) setSharePagesUrl(info.defaultPagesUrl);
       })
       .catch(() => {
-        // Bỏ qua nếu đang xem từ xa hoặc endpoint chưa bật
+        // Bỏ qua nếu đang xem từ xa
       });
     return () => {
       alive = false;
@@ -202,28 +197,12 @@ export function SettingsDrawer({
     'https://khai-1711.github.io/research_ai_web/'
   ).trim();
   const cleanTunnelUrl = shareTunnelUrl.trim().replace(/\/+$/, '');
-  const builtInviteLink =
-    cleanTunnelUrl && shareInfo?.token
-      ? `${cleanPagesUrl}${cleanPagesUrl.includes('?') ? '&' : '?'}api=${encodeURIComponent(
-          cleanTunnelUrl
-        )}#token=${encodeURIComponent(shareInfo.token)}`
-      : '';
-
-  const handleEnableShareToken = async () => {
-    setShareBusy(true);
-    setShareMsg(null);
-    try {
-      const info = await enableShareTokenApi();
-      setShareInfo(info);
-      if (info.defaultPagesUrl) setSharePagesUrl(info.defaultPagesUrl);
-      setShareMsg('Đã kích hoạt mã truy cập từ xa (.share_token).');
-      await onRefreshProvidersAndModels();
-    } catch (err) {
-      setShareMsg(err instanceof Error ? err.message : 'Không bật được mã chia sẻ.');
-    } finally {
-      setShareBusy(false);
-    }
-  };
+  const tokenSuffix = shareInfo?.token ? `#token=${encodeURIComponent(shareInfo.token)}` : '';
+  const builtInviteLink = cleanTunnelUrl
+    ? `${cleanPagesUrl}${cleanPagesUrl.includes('?') ? '&' : '?'}api=${encodeURIComponent(
+        cleanTunnelUrl
+      )}${tokenSuffix}`
+    : '';
 
   const handleCopyInviteLink = async () => {
     if (!builtInviteLink) return;
@@ -232,14 +211,13 @@ export function SettingsDrawer({
       setCopiedInvite(true);
       window.setTimeout(() => setCopiedInvite(false), 2000);
     } catch {
-      setShareMsg('Không tự copy được, hãy chọn ô Link mời để copy tay.');
+      // ignore clipboard restrictions
     }
   };
 
   const handleSaveRemoteEndpoint = () => {
-    const saved = saveRemoteConfig(shareTunnelUrl, remoteTokenDraft);
+    const saved = saveRemoteConfig(shareTunnelUrl);
     setShareTunnelUrl(saved.apiBase);
-    setRemoteTokenDraft(saved.shareToken);
     window.location.reload();
   };
 
@@ -578,14 +556,8 @@ export function SettingsDrawer({
                   Khách kết nối từ xa
                 </span>
               ) : (
-                <span
-                  className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
-                    shareInfo?.enabled
-                      ? 'bg-[var(--ok-soft)] text-[var(--ok)]'
-                      : 'bg-[var(--bg-subtle)] text-[var(--ink-muted)]'
-                  }`}
-                >
-                  {shareInfo?.enabled ? 'Đã bật Passcode' : 'Chỉ dùng nội bộ'}
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-[var(--ok-soft)] text-[var(--ok)]">
+                  Mở không cần đăng nhập
                 </span>
               )}
             </div>
@@ -593,28 +565,8 @@ export function SettingsDrawer({
             {!isRemoteGuest ? (
               <div className="space-y-2.5">
                 <p className="text-[11px] text-[var(--ink-muted)] leading-relaxed">
-                  Chạy <code className="px-1 py-0.5 rounded bg-[var(--surface)]">python start.py share</code> trong thư mục gốc để mở HTTPS Tunnel rồi dán URL Tunnel vào dưới đây để tạo Link mời 1 chạm cho 1–2 bạn dùng chung backend.
+                  Chạy <code className="px-1 py-0.5 rounded bg-[var(--surface)]">python start.py share</code> trong thư mục gốc để mở HTTPS Tunnel rồi dán URL Tunnel vào dưới đây để tạo Link mở nhanh cho bạn bè (vào thẳng phòng, không cần mật khẩu).
                 </p>
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    disabled={shareBusy}
-                    onClick={handleEnableShareToken}
-                    className="px-2.5 py-1.5 rounded-lg bg-[var(--accent)] text-[var(--accent-ink)] text-[11px] font-semibold hover:bg-[var(--accent-hover)] disabled:opacity-50 inline-flex items-center gap-1 cursor-pointer"
-                  >
-                    <Link2 className="w-3 h-3" />
-                    {shareBusy
-                      ? 'Đang tạo mã...'
-                      : shareInfo?.enabled
-                      ? 'Tạo lại / Hiện Passcode'
-                      : 'Bật Passcode chia sẻ'}
-                  </button>
-                  {shareInfo?.enabled && shareInfo.token && (
-                    <span className="font-mono-num text-[11px] px-2 py-1 rounded bg-[var(--surface)] border border-[var(--border)] text-[var(--ink)]">
-                      Passcode: <strong>{shareInfo.token}</strong>
-                    </span>
-                  )}
-                </div>
                 <div className="grid grid-cols-1 gap-2">
                   <input
                     type="text"
@@ -650,7 +602,6 @@ export function SettingsDrawer({
                     </button>
                   </div>
                 )}
-                {shareMsg && <p className="text-[11px] text-[var(--ok)]">{shareMsg}</p>}
               </div>
             ) : (
               <div className="space-y-2.5">
@@ -661,14 +612,7 @@ export function SettingsDrawer({
                   type="text"
                   value={shareTunnelUrl}
                   onChange={(e) => setShareTunnelUrl(e.target.value)}
-                  placeholder="Link mời hoặc URL Tunnel HTTPS"
-                  className="w-full px-2.5 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] text-xs text-[var(--ink)] focus:outline-none focus:border-[var(--accent)]"
-                />
-                <input
-                  type="password"
-                  value={remoteTokenDraft}
-                  onChange={(e) => setRemoteTokenDraft(e.target.value)}
-                  placeholder="Passcode truy cập"
+                  placeholder="URL Tunnel HTTPS hoặc Link mời"
                   className="w-full px-2.5 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] text-xs text-[var(--ink)] focus:outline-none focus:border-[var(--accent)]"
                 />
                 <div className="flex items-center gap-2">

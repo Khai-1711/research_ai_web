@@ -143,7 +143,6 @@ export function ResearchLabApp({
   const [nowMs, setNowMs] = useState(Date.now());
   const [remoteConnectNeeded, setRemoteConnectNeeded] = useState(false);
   const [inviteOrApiDraft, setInviteOrApiDraft] = useState(() => getRemoteConfig().apiBase);
-  const [tokenDraft, setTokenDraft] = useState(() => getRemoteConfig().shareToken);
   const [connectError, setConnectError] = useState<string | null>(null);
   const [connectingRemote, setConnectingRemote] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
@@ -1154,11 +1153,10 @@ export function ResearchLabApp({
     e.preventDefault();
     setConnectingRemote(true);
     setConnectError(null);
-    const saved = saveRemoteConfig(inviteOrApiDraft, tokenDraft);
+    const saved = saveRemoteConfig(inviteOrApiDraft);
     setInviteOrApiDraft(saved.apiBase);
-    setTokenDraft(saved.shareToken);
     if (!saved.apiBase) {
-      setConnectError('Hãy dán Link mời đầy đủ hoặc nhập URL Tunnel HTTPS (ví dụ https://xxxx.trycloudflare.com).');
+      setConnectError('Hãy dán URL Tunnel HTTPS hoặc Link mời (ví dụ https://xxxx.trycloudflare.com).');
       setConnectingRemote(false);
       return;
     }
@@ -1190,7 +1188,7 @@ export function ResearchLabApp({
               Kết nối tới Backend Cục bộ qua HTTPS Tunnel
             </h1>
             <p className="text-xs text-[var(--ink-secondary)] leading-relaxed">
-              Giao diện đang chạy tĩnh trên trình duyệt. Hãy dán <strong>Link mời 1 chạm</strong> từ chủ phòng, hoặc tự điền <strong>URL Tunnel HTTPS</strong> và <strong>Mã truy cập (Passcode)</strong> do lệnh{' '}
+              Giao diện đang chạy tĩnh trên trình duyệt. Hãy mở <strong>Link mời 1 chạm</strong> từ chủ phòng, hoặc dán <strong>URL Tunnel HTTPS</strong> do lệnh{' '}
               <code className="px-1 py-0.5 rounded bg-[var(--bg-subtle)]">python start.py share</code> tạo ra.
             </p>
           </div>
@@ -1202,39 +1200,21 @@ export function ResearchLabApp({
             </div>
           )}
 
-          <div className="space-y-3">
-            <div>
-              <label
-                htmlFor="remote-api-input"
-                className="block text-xs font-medium text-[var(--ink-secondary)] mb-1"
-              >
-                Link mời 1 chạm hoặc URL Tunnel HTTPS
-              </label>
-              <input
-                id="remote-api-input"
-                type="text"
-                value={inviteOrApiDraft}
-                onChange={(e) => setInviteOrApiDraft(e.target.value)}
-                placeholder="https://xxxx.trycloudflare.com  hoặc dán nguyên link ?api=...#token=..."
-                className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-xs text-[var(--ink)] focus:outline-none focus:border-[var(--accent)]"
-              />
-            </div>
-            <div>
-              <label
-                htmlFor="remote-token-input"
-                className="block text-xs font-medium text-[var(--ink-secondary)] mb-1"
-              >
-                Mã truy cập (Passcode)
-              </label>
-              <input
-                id="remote-token-input"
-                type="password"
-                value={tokenDraft}
-                onChange={(e) => setTokenDraft(e.target.value)}
-                placeholder="Bỏ trống nếu bạn đã dán nguyên Link mời ở trên"
-                className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-xs text-[var(--ink)] focus:outline-none focus:border-[var(--accent)]"
-              />
-            </div>
+          <div>
+            <label
+              htmlFor="remote-api-input"
+              className="block text-xs font-medium text-[var(--ink-secondary)] mb-1"
+            >
+              URL Tunnel HTTPS hoặc Link mời
+            </label>
+            <input
+              id="remote-api-input"
+              type="text"
+              value={inviteOrApiDraft}
+              onChange={(e) => setInviteOrApiDraft(e.target.value)}
+              placeholder="https://xxxx.trycloudflare.com"
+              className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-xs text-[var(--ink)] focus:outline-none focus:border-[var(--accent)]"
+            />
           </div>
 
           <button

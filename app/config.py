@@ -111,7 +111,7 @@ def load_settings() -> Settings:
     raw_bridge = os.getenv("BRIDGE_URL", "http://127.0.0.1:10000").strip()
     raw_cors = os.getenv("WEBCHAT_CORS_ORIGINS", "*").strip()
     cors_tuple = tuple(p.strip() for p in raw_cors.split(",") if p.strip()) or ("*",)
-    raw_token = os.getenv("WEBCHAT_SHARE_TOKEN", "").strip() or _read_share_token_file()
+    raw_token = os.getenv("WEBCHAT_SHARE_TOKEN", "").strip()
     return Settings(
         host=os.getenv("HOST", "127.0.0.1").strip() or "127.0.0.1",
         port=int(os.getenv("PORT", "3000").strip() or "3000"),

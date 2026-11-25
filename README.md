@@ -26,7 +26,7 @@
   - Every response is deterministically audited for hallucinated source IDs, abstract-only citations, and quantitative numeric claims (`%`, decimals, sample sizes `n=...`), surfacing **Kiểm chứng tự động** cards in the chat feed and feeding an objective audit report to Blind Judge.
 - **Rich Academic Markdown & Blind Judge Synthesis:** Full GFM Markdown rendering (tables, headings, blockquotes, code blocks, clickable citation pills), bidirectional anonymization (`Ứng viên A/B/C…`), 3-axis Rubric scoring (`Evidence` / `Logic` / `Rebuttal`), **Living Outline**, and 5-section Markdown report export.
 - **Liveness-First Deep Research Streaming (`X-DSH-Research-Mode: 1` + SSE Heartbeat):** Research turns lift the 180s wall-clock cap and avoid automatic 50s smart-model downgrades (`gemini-carbon` / `gemini-neon` stays active), streaming live progress (`queued_lock` → `waiting_gemini` → `thinking` → `generating`) and keep-alive heartbeats end-to-end.
-- **GitHub Pages Sharing to Local Backend (`share-pages`):** Deploy the static frontend on GitHub Pages while letting 1–2 trusted friends connect to your local backend over a passcode-protected HTTPS tunnel (`python start.py share`) with host-admin controls locked remotely.
+- **GitHub Pages Sharing to Local Backend (`share-pages`):** Deploy the static frontend on GitHub Pages while letting 1–2 trusted friends connect straight to your local backend over an HTTPS tunnel (`python start.py share`) with no login required (optional `WEBCHAT_SHARE_TOKEN` in `.env`) and host-admin controls locked remotely.
 
 ### 2. Independent Visual AI Flow Map (`/flow`)
 - **Zero-Coupling Live Visualization:** Shares zero DOM/state with the Chat surface; subscribes exclusively via Server-Sent Events (`/api/rooms/{id}/events`) to the same append-only `events.jsonl` log.
@@ -154,21 +154,21 @@ pytest -v
 npx tsc --noEmit
 ```
 
-### 4. Share Safely via GitHub Pages (`share-pages` branch)
+### 4. Share via GitHub Pages (`share-pages` branch)
 1. Push the `share-pages` branch to GitHub; [deploy-pages.yml](.github/workflows/deploy-pages.yml) builds `dist/` with relative asset paths (`base: './'`) to `https://khai-1711.github.io/research_ai_web/`.
-2. Start the local stack (`python start.py`), then start the HTTPS tunnel & share passcode in a second terminal from the workspace root:
+2. Run one command from the workspace root to start Bridge, WebChat (`:3000`), and the HTTPS tunnel together:
    ```bash
    python start.py share
    ```
-   *(Requires `cloudflared`; generates `.share_token`, enables passcode auth on `:3000`, and prints a 1-click invite URL `?api=<https-tunnel>#token=<passcode>` — you can also enable/copy the invite link inside **Settings**.)*
-3. Friends simply open the invite link in their browser without installing Python or Node; the `#token` fragment is stored in `localStorage` and scrubbed from the URL bar automatically.
+   *(Requires `cloudflared`; prints a direct invite URL `https://khai-1711.github.io/research_ai_web/?api=<https-tunnel>` with no login required — optionally set `WEBCHAT_SHARE_TOKEN=...` in `webchat/.env` if you ever want an extra token.)*
+3. Press `Ctrl+C` or close the terminal to shut down the tunnel when finished.
 
 ---
 
 ## Security & Privacy
 
 - **Local-First Secret Isolation:** Runtime room histories (`data/rooms/`), user API keys (`data/providers.json`), custom account names (`data/lane_names.json`), `.share_token`, and `.env` files are excluded via `.gitignore`. API keys are masked (`AIza...9x2Q`) in every API response.
-- **Tunnel Auth & Host-Admin Lockdown (`app/main.py`):** Distinguishes direct local loopback requests from proxied/tunnel requests (`Cf-Connecting-Ip`, `X-Forwarded-For`, external `Origin`): unauthenticated remote API calls receive `401`, and host-only machine endpoints (browser cookie login, worker creation, provider key creation/deletion, `.share_token` viewing) return `403` for remote callers.
+- **Host-Admin Lockdown (`app/main.py`):** Distinguishes direct local loopback requests from proxied/tunnel requests (`Cf-Connecting-Ip`, `X-Forwarded-For`, external `Origin`): host-only machine endpoints (browser cookie login, worker creation, provider key creation/deletion, `/api/share-info`) strictly return `403` for remote callers; if `WEBCHAT_SHARE_TOKEN` is optionally set in `.env`, unauthenticated remote calls return `401`.
 - **Stateless Bridge Isolation (`X-DSH-Ephemeral: 1`):** Research requests instruct Bridge workers never to read or mutate persistent chat sessions, model defaults, transcripts, or coding handoff ledgers.
 - **Multi-Hop SSRF Defense (`app/research.py`):** Rejects non-HTTP(S) schemes, private/loopback/link-local IPs, and `.local`/`.internal` hostnames before DNS resolution and on every HTTP `Location` redirect hop (up to 5 hops).
 - **Safe Local PDF Ingestion:** `/api/research/upload-pdf` enforces a strict **15 MB** cap and `%PDF-` signature validation, returning clean `400`/`413` errors on invalid or image-only PDFs.

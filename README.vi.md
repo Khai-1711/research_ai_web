@@ -26,7 +26,7 @@
   - Sau mỗi lượt AI, backend đối chiếu tất định số liệu (`%`, số thập phân, cỡ mẫu `n=...`), phát hiện mã `[S#]` bịa đặt và cảnh báo nếu trích dẫn từ nguồn chỉ có tóm tắt; kết quả kiểm chứng hiển thị ngay trong khung **Kiểm chứng tự động** dưới câu trả lời và đưa vào cho Trọng tài chấm điểm.
 - **Hiển thị Markdown học thuật & Trọng tài ẩn danh (Blind Judge):** Kết xuất đầy đủ bảng GFM, tiêu đề, khối trích dẫn, code block, huy hiệu trích dẫn bấm để tô sáng nguồn; Trọng tài che tên thành `Ứng viên A/B/C…`, xuất bảng Rubric 3 trục (`Bằng chứng` / `Logic` / `Phản biện`), **Dàn ý sống** và Báo cáo 5 mục (tải `.md`).
 - **Luồng Nghiên cứu Ưu tiên Giữ Kết nối (`X-DSH-Research-Mode: 1` + SSE Liveness):** Không còn cắt cứng 180 giây hay tự hạ model thông minh (`gemini-carbon` / `gemini-neon` xuống `gemini-4-hydrogen`) khi AI đang suy luận sâu; giao diện hiển thị trạng thái sống thực tế (`queued_lock` → `waiting_gemini` → `thinking` → `generating` kèm nhịp tim heartbeat).
-- **Chia sẻ qua GitHub Pages tới Backend Cục bộ (`share-pages`):** Bạn bè (1–2 người) có thể mở giao diện tĩnh ngay trên GitHub Pages và kết nối an toàn tới backend đang chạy trên máy bạn qua HTTPS Tunnel (`python start.py share`) kèm Passcode tự sinh và khóa toàn bộ thao tác quản trị máy chủ.
+- **Chia sẻ qua GitHub Pages tới Backend Cục bộ (`share-pages`):** Bạn bè (1–2 người) có thể mở giao diện tĩnh ngay trên GitHub Pages và kết nối trực tiếp tới backend đang chạy trên máy bạn qua HTTPS Tunnel (`python start.py share`) không cần đăng nhập (tuỳ chọn đặt thêm `WEBCHAT_SHARE_TOKEN` trong `.env`), đồng thời khóa toàn bộ thao tác quản trị máy chủ.
 
 ### 2. Bản đồ Luồng AI Trực quan Độc lập (`/flow`)
 - **Tách biệt hoàn toàn (Zero Coupling):** Không chia sẻ DOM hay trạng thái nội bộ với giao diện Chat; chỉ lắng nghe SSE (`/api/rooms/{id}/events`) từ cùng tệp sự kiện append-only `events.jsonl`.
@@ -167,19 +167,19 @@ npx tsc --noEmit
 
 ### 4. Chia sẻ cho bạn bè dùng thử qua GitHub Pages (nhánh `share-pages`)
 1. Đẩy nhánh `share-pages` lên GitHub; workflow [deploy-pages.yml](.github/workflows/deploy-pages.yml) tự động build `dist/` với đường dẫn tương đối (`base: './'`) lên `https://khai-1711.github.io/research_ai_web/`.
-2. Tại thư mục gốc workspace trên máy bạn, chạy backend cục bộ (`python start.py`) và mở HTTPS Tunnel + mã Passcode trong terminal thứ 2:
+2. Tại thư mục gốc workspace trên máy bạn, chạy 1 lệnh sau để bật cả Bridge, WebChat `:3000` lẫn HTTPS Tunnel:
    ```bash
    python start.py share
    ```
-   *(Yêu cầu đã cài `cloudflared`; lệnh này tự tạo tệp `.share_token` nội bộ, kích hoạt bảo vệ trên cổng `:3000` và in sẵn **Link mời 1 chạm** dạng `https://khai-1711.github.io/research_ai_web/?api=<tunnel-url>#token=<passcode>` — hoặc mở **Cài đặt** ngay trên Web để bật/copy link.)*
-3. Bạn bè chỉ cần mở Link mời trên trình duyệt là dùng chung được ngay mà không cần cài Python/Node; token nằm trong `#fragment` và tự xóa khỏi thanh địa chỉ sau khi lưu vào `localStorage`.
+   *(Yêu cầu đã cài `cloudflared`; lệnh này tự in sẵn **Link mời mở thẳng** dạng `https://khai-1711.github.io/research_ai_web/?api=<tunnel-url>` để bạn bè mở là dùng ngay không cần đăng nhập. Nếu muốn khóa thêm mật khẩu tuỳ chọn, chỉ cần thêm `WEBCHAT_SHARE_TOKEN=...` vào `webchat/.env`.)*
+3. Đóng cửa sổ chạy `start.py share` (hoặc bấm `Ctrl+C`) để ngắt HTTPS Tunnel ngay khi test xong.
 
 ---
 
 ## An toàn & Bảo mật
 
 - **Cô lập bí mật cục bộ:** Lịch sử phòng (`data/rooms/`), API key (`data/providers.json`), tên acc tự đặt (`data/lane_names.json`), `.share_token` và các tệp `.env` được chặn commit trong `.gitignore`. Toàn bộ API key được che (`AIza...9x2Q`) trước khi trả ra giao diện.
-- **Bảo vệ Tunnel & Khóa quyền Máy chủ:** Middleware trong `app/main.py` phân biệt truy cập trực tiếp từ máy chủ với truy cập qua proxy/tunnel (`Cf-Connecting-Ip`, `X-Forwarded-For`, `Origin` ngoài): mọi yêu cầu từ xa thiếu `X-Share-Token` / `share_token` đều nhận `401`, và mọi API tác động lên máy chủ (mở trình duyệt đăng nhập cookie, `Sync ngầm`, tạo acc mới, thêm/xóa API key, xem `.share_token`) bị chặn cứng `403` từ xa.
+- **Khóa quyền Máy chủ từ xa (`app/main.py`):** Middleware phân biệt truy cập trực tiếp tại máy chủ với truy cập qua proxy/tunnel (`Cf-Connecting-Ip`, `X-Forwarded-For`, `Origin` ngoài): mọi API tác động lên máy chủ (mở trình duyệt đăng nhập cookie, `Sync ngầm`, tạo acc mới, thêm/xóa API key, xem `/api/share-info`) đều bị chặn cứng `403` từ xa; nếu cấu hình thêm `WEBCHAT_SHARE_TOKEN` trong `.env` thì yêu cầu từ xa thiếu token sẽ nhận `401`.
 - **Cô lập phiên Bridge (`X-DSH-Ephemeral: 1`):** Mỗi lượt nghiên cứu chạy độc lập hoàn toàn trên Bridge, không đọc/ghi vào sổ ghi nhớ hoặc tệp handoff của các tác vụ khác và không lưu đè trạng thái phiên chat.
 - **Chống SSRF đa chặng:** Mọi URL nạp vào Deep Research hoặc tự tải PDF nguồn mở đều được kiểm tra dải IP công khai (chặn loopback, mạng nội bộ, link-local) trước khi kết nối và tại từng bước chuyển hướng `Location` tối đa 5 chặng (`app/research.py`).
 - **Tải PDF an toàn:** Tệp `.pdf` tải lên qua `/api/research/upload-pdf` bị chặn ở ngưỡng **15 MB**, kiểm tra chữ ký `%PDF-`, và báo lỗi rõ nếu PDF chỉ là bản quét hình ảnh chưa có lớp chữ.
